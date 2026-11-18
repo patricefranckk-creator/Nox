@@ -1,0 +1,35 @@
+name: Construire l'APK Nox
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: SDK Android 36
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Compilation
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Renommer l'APK
+        run: cp app/build/outputs/apk/release/app-release.apk Nox.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nox-apk
+          path: Nox.apk

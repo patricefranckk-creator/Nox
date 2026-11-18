@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Nox" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nox_bg</item>
+        <item name="android:colorAccent">@color/nox_accent</item>
+        <item name="android:colorPrimary">@color/nox_bg</item>
+        <item name="android:navigationBarColor">@color/nox_bg</item>
+        <item name="android:statusBarColor">@color/nox_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:alertDialogTheme">@style/Theme.Nox.Dialog</item>
+    </style>
+
+    <style name="Theme.Nox.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/nox_accent</item>
+        <item name="android:windowBackground">@drawable/dialog_bg</item>
+    </style>
+</resources>
