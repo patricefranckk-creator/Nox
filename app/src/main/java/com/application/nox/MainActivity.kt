@@ -38,6 +38,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     lateinit var engine: LlmEngine
     lateinit var voiceOut: VoiceOut
     lateinit var skills: Skills
+    lateinit var library: Library
+    private var pendingImage: ByteArray? = null
+    private lateinit var attachRow: LinearLayout
+    private lateinit var attachLabel: TextView
+    private var embedTried = false
     private var voiceIn: VoiceIn? = null
     private var capture: AudioCapture? = null
 
@@ -71,9 +76,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         prefs = Prefs(this)
         store = ModelStore(this)
         chats = ChatStore(this)
-        skills = Skills(this)
+        library = Library(this, store)
+        skills = Skills(this, library)
         skills.onUsed = { label -> addChip(label) }
-        engine = LlmEngine(this, prefs, store, skills)
+        skills.askPermission = { perm -> requestPermissions(arrayOf(perm), REQ_PERM) }
+        engine = LlmEngine(this, prefs, store, skills, library)
         voiceOut = VoiceOut(this, prefs, this)
 
         window.setDecorFitsSystemWindows(false)   // bord à bord partout, on gère les marges nous-mêmes
@@ -83,6 +90,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         scrollToEnd()
 
         askPermissions()
+        handleShare(intent)
         bootModel()
         updateKeepScreen()
     }
@@ -91,6 +99,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private val autoPlug = object : Runnable {
         override fun run() {
             store.pruneCustom().forEach { toast("Échec du téléchargement de $it (lien privé ou invalide ?)") }
+            if (!embedTried && store.embedFile() != null) { embedTried = true; library.enableSemantic() }
             if (!engine.ready && !loading && (prefs.modelPath.isBlank() || !java.io.File(prefs.modelPath).exists())) {
                 val ready = store.localModels().firstOrNull()
                 if (ready != null) {
@@ -128,6 +137,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         capture?.cancel()
         voiceOut.release()
         engine.release()
+        library.release()
         super.onDestroy()
     }
 
@@ -209,10 +219,22 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 override fun afterTextChanged(s: Editable?) = refreshAction()
             })
         }
+        bar.addView(iconButton("＋", 42) { pickImage() }.also { it.contentDescription = "Joindre une photo" })
+        bar.addView(spacer(8))
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(spacer(8))
         actionBtn = iconButton("🎙", 50, Ui.ACCENT, Color.WHITE) { onAction() }
         bar.addView(actionBtn)
+        attachRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(2), dp(16), 0)
+            visibility = View.GONE
+        }
+        attachLabel = text("📷 photo jointe", 13f, Ui.CYAN)
+        attachRow.addView(attachLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        attachRow.addView(text("✕ retirer", 13f, Ui.MUTED).apply { setPadding(dp(10), dp(6), dp(4), dp(6)); setOnClickListener { clearAttachment() } })
+        col.addView(attachRow)
         col.addView(bar)
 
         // Bords à bords (Android 15+) : on respecte barres système et clavier
@@ -279,7 +301,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         val generating = engine.busy || voiceOut.speaking
         actionBtn.text = when {
             generating -> "■"
-            input.text.isNotBlank() -> "➤"
+            input.text.isNotBlank() || pendingImage != null -> "➤"
             else -> "🎙"
         }
     }
@@ -334,7 +356,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun onAction() {
         when {
             engine.busy || voiceOut.speaking -> interrupt()
-            input.text.isNotBlank() -> {
+            input.text.isNotBlank() || pendingImage != null -> {
                 val t = input.text.toString().trim()
                 input.setText("")
                 getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(input.windowToken, 0)
@@ -362,19 +384,27 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         refreshAction()
     }
 
-    private fun send(text: String) = runTurn(text, null, 0L)
+    private fun send(text: String) {
+        val img = pendingImage
+        clearAttachment()
+        runTurn(if (img != null && text.isBlank()) "Que vois-tu sur cette photo ?" else text, null, 0L, img)
+    }
 
     private fun sendAudio(wav: ByteArray, ms: Long) = runTurn(null, wav, ms)
 
     /** Un tour de parole complet : bulle utilisateur → réflexion → réponse en flux (+ voix). */
-    private fun runTurn(text: String?, wav: ByteArray?, ms: Long) {
+    private fun runTurn(text: String?, wav: ByteArray?, ms: Long, image: ByteArray? = null) {
         if (!engine.ready) { toast(if (loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
         if (engine.busy) return
         stopListening()
         voiceOut.stop()
 
         val prior = messages.toList()
-        val userMsg = ChatMsg(true, text ?: "🎙 message vocal (${(ms + 500) / 1000} s)")
+        val userMsg = ChatMsg(true, when {
+            image != null -> "📷 " + (text?.ifBlank { "Que vois-tu sur cette photo ?" } ?: "")
+            text != null -> text
+            else -> "🎙 message vocal (${(ms + 500) / 1000} s)"
+        })
         val userView = addBubble(userMsg)
         val reply = ChatMsg(false, "")
         val view = addBubble(reply, save = false)
@@ -403,9 +433,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 userView.text = Markdown.render("🎙 $text")
             }
 
+            override fun onContext(n: Int) = addChip("📚 $n extrait${if (n > 1) "s" else ""} de ta bibliothèque")
+
             override fun onDone(stats: String) {
                 if (reply.text.isBlank()) { reply.text = "(silence)"; view.text = reply.text }
                 statsLine.text = stats
+                if (prefs.rememberChats && stats != "interrompu") library.addExchange(userMsg.text.removePrefix("🎙 ").removePrefix("📷 "), reply.text)
                 finishTurn(speak)
             }
 
@@ -415,7 +448,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 finishTurn(speak)
             }
         }
-        if (wav != null) engine.sendAudio(wav, ms, prior, listener) else engine.send(text ?: "", prior, listener)
+        if (wav != null) engine.sendAudio(wav, ms, prior, listener) else engine.send(text ?: "", prior, listener, image)
         refreshAction()
     }
 
@@ -572,12 +605,80 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_MIC && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startListening()
+        if (requestCode == REQ_PERM && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) toast("Merci ! Redemande-moi, ça va marcher.")
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == ModelsDialog.REQ_IMPORT) ModelsDialog.onImportResult(this, resultCode, data)
+        if (requestCode == REQ_IMAGE && resultCode == RESULT_OK) data?.data?.let { loadImage(it) }
+        if (requestCode == SkillsDialog.REQ_DOC && resultCode == RESULT_OK) data?.data?.let { SkillsDialog.importDocument(this, it) }
+    }
+
+    // ---- vue 📷
+
+    private fun pickImage() {
+        if (!engine.visionReady) {
+            toast(if (engine.ready) "La vue n'est pas active : il faut Gemma série E et l'option « Vue » dans les réglages" else "Le modèle n'est pas chargé")
+            return
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), REQ_IMAGE)
+    }
+
+    /** Réduit la photo à 768 px max : assez pour Gemma, rapide à encoder. */
+    private fun loadImage(uri: android.net.Uri) {
+        Thread {
+            try {
+                val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
+                var sample = 1
+                while (maxOf(opts.outWidth, opts.outHeight) / (sample * 2) >= 768) sample *= 2
+                val bmp = contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                } ?: error("image illisible")
+                val scale = 768f / maxOf(bmp.width, bmp.height)
+                val fin = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true) else bmp
+                val out = java.io.ByteArrayOutputStream()
+                fin.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, out)
+                main.post {
+                    pendingImage = out.toByteArray()
+                    attachLabel.text = "📷 photo jointe (${fin.width}×${fin.height}) · pose ta question"
+                    attachRow.visibility = View.VISIBLE
+                    input.requestFocus()
+                    refreshAction()
+                }
+            } catch (t: Throwable) {
+                main.post { toast("Photo illisible : ${t.message}") }
+            }
+        }.start()
+    }
+
+    private fun clearAttachment() {
+        pendingImage = null
+        attachRow.visibility = View.GONE
+    }
+
+    // ---- partage vers Nox (texte depuis une autre appli)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val txt = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+        if (txt.isEmpty()) return
+        val title = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.takeIf { it.isNotBlank() } ?: txt.take(40).replace('\n', ' ')
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Texte reçu (${txt.length} caractères)")
+            .setItems(arrayOf("Ajouter à la bibliothèque de Nox", "En parler avec Nox")) { _, w ->
+                if (w == 0) library.addDocument(title, txt) { n -> toast("Ajouté à la bibliothèque ($n extrait${if (n > 1) "s" else ""})") }
+                else { input.setText(txt.take(4000)); input.setSelection(input.text.length) }
+            }.show()
+        intent.action = null
     }
 
     private fun welcomeText() = buildString {
@@ -592,5 +693,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     companion object {
         private const val REQ_MIC = 11
         private const val REQ_ALL = 12
+        private const val REQ_PERM = 13
+        private const val REQ_IMAGE = 14
     }
 }

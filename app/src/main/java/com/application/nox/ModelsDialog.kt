@@ -67,10 +67,10 @@ class ModelsDialog(private val a: MainActivity) {
         body.addView(a.text("Tout tourne sur ton téléphone. Internet ne sert qu'à ce téléchargement unique.", 12.5f, Ui.MUTED)
             .apply { setPadding(0, a.dp(2), 0, 0) })
 
-        body.addView(a.sectionTitle("Gemma 4 · modèles « E »"))
-        store.catalog.filter { it.id.startsWith("gemma") }.forEach { body.addView(card(it)) }
-        body.addView(a.sectionTitle("Autres familles"))
-        store.catalog.filterNot { it.id.startsWith("gemma") }.forEach { body.addView(card(it)) }
+        body.addView(a.sectionTitle("Cœur · Gemma 4 série E"))
+        store.catalog.forEach { body.addView(card(it)) }
+        body.addView(a.sectionTitle("Mémoire sémantique (bibliothèque)"))
+        body.addView(card(store.embedSpec))
 
         val imported = store.localModels().filter { f -> store.catalog.none { it.file == f.name } }
         if (imported.isNotEmpty()) {
@@ -85,7 +85,7 @@ class ModelsDialog(private val a: MainActivity) {
         }
 
         body.addView(a.sectionTitle("Depuis un lien Hugging Face"))
-        body.addView(a.text("Colle le lien d'un fichier .litertlm (page du fichier ou lien de téléchargement).", 13f, Ui.MUTED))
+        body.addView(a.text("Colle le lien d'un fichier .litertlm Gemma série E (3n ou 4) : page du fichier ou lien de téléchargement.", 13f, Ui.MUTED))
         urlField = EditText(a).apply {
             setText(pendingUrl)
             hint = "huggingface.co/…/modele.litertlm"
@@ -142,6 +142,12 @@ class ModelsDialog(private val a: MainActivity) {
                 }
                 box.addView(a.text(label, 12.5f, Ui.MUTED).apply { setPadding(0, a.dp(6), 0, a.dp(6)) })
                 box.addView(row(a.pillButton("Annuler", filled = false) { store.cancel(s); render() }))
+            }
+            store.isInstalled(s) && s === store.embedSpec -> {
+                val f = store.fileFor(s)
+                box.addView(a.text(if (a.library.semantic) "✓ Actif · ${a.library.stats()}" else "Installé · activation…", 12.5f, Ui.CYAN)
+                    .apply { setPadding(0, 0, 0, a.dp(8)) })
+                box.addView(row(a.pillButton("Supprimer", filled = false) { confirmDelete(f) }))
             }
             store.isInstalled(s) -> {
                 val f = store.fileFor(s)
@@ -220,6 +226,7 @@ class ModelsDialog(private val a: MainActivity) {
                 val wasActive = a.prefs.modelPath == f.absolutePath
                 store.delete(f)
                 if (wasActive) { a.prefs.modelPath = ""; a.toast("Modèle actif supprimé") }
+                if (f.name == store.embedSpec.file) a.library.disableSemantic()
                 render()
             }
             .setNegativeButton("Annuler", null).show()

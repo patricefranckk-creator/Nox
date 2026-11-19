@@ -27,12 +27,17 @@ Nox est un assistant qui vit entièrement dans le téléphone : le modèle de la
 3. À la fin du téléchargement, Nox se branche tout seul.
 4. Si la reconnaissance vocale signale un pack manquant : Réglages Android › Google › Voix › Reconnaissance vocale hors connexion › Français.
 
-## Le harnais
+## Le harnais (cœur verrouillé : Gemma série E)
 
-- **Oreille Gemma (écoute native)** : avec Gemma 4 E2B/E4B, ta voix part directement dans le modèle (16 kHz, détection automatique de fin de phrase, suppression du bruit, 30 s max). Il entend le ton, les hésitations, et écrit ce qu'il a compris dans ta bulle. Touche l'orbe quand tu as fini pour envoyer tout de suite. Autres modèles : reconnaissance vocale du téléphone, automatiquement.
-- **Compétences (⚡)** : outils réels que le modèle appelle tout seul — heure/date, calculatrice exacte, minuteur, réveil, notes et listes (courses…), mémoire longue (« retiens que… » / « oublie… »), lampe torche, volume, ouvrir une appli, préparer un événement d'agenda, état du téléphone. Une puce s'affiche à chaque action.
-- **Mémoire longue** : les faits retenus sont réinjectés dans chaque conversation ; consultables et effaçables dans ⚡.
-- **Optimisations** : consigne + outils + historique pré-calculés au chargement (premier mot plus rapide), réflexion désactivée, compactage du contexte, cascade GPU → CPU avec repli sans oreille si besoin.
+Le modèle ne change pas : Gemma 4 E2B (vitesse) ou E4B (qualité). Tout le reste est le harnais.
+
+- **Oreille Gemma** : ta voix va directement dans le modèle (16 kHz, fin de phrase détectée, bruit réduit). Il écrit ce qu'il a compris dans ta bulle. Touche l'orbe quand tu as fini.
+- **Vue 📷** : bouton ＋ pour joindre une photo, Gemma la regarde (texte, objets, documents…).
+- **Bibliothèque (RAG hybride)** : documents texte, notes et anciennes conversations. Recherche par mots-clés (BM25, toujours dispo) + par le sens (EmbeddingGemma 2, à installer dans ◉), fusionnées (RRF). Les extraits très pertinents sont glissés automatiquement avant la réponse ; sinon Gemma va chercher lui-même avec l'outil « bibliotheque ».
+- **14 compétences** (appelées par Gemma) : heure, calculatrice exacte, minuteur/réveil, rappels (notifications), notes & listes, mémoire longue, bibliothèque, musique (jouer, pause, suivant…), appels & SMS préparés (contacts), itinéraire GPS, ouvrir une appli ou un réglage (wifi, bluetooth, son…), téléphone (lampe, volume, batterie), agenda, partager/copier/recherche web.
+- **Mémoire** : longue (« retiens que… ») injectée dans chaque conversation ; épisodique (les échanges passés deviennent cherchables).
+- **Partage vers Nox** : depuis n'importe quelle appli, partage un texte → l'ajouter à la bibliothèque ou en parler.
+- **Performances** : consigne + outils + historique pré-calculés au chargement, réflexion désactivée, compactage du contexte, cascade GPU → CPU avec repli sans vue / sans oreille / sans outils plutôt que planter.
 
 ## Gestes
 
@@ -56,6 +61,11 @@ app/src/main/java/com/application/nox/
   LlmEngine.kt      LiteRT-LM : cascade GPU+MTP → GPU → CPU, streaming, compactage du contexte
   VoiceIn.kt        reconnaissance vocale sur l'appareil + repli
   VoiceOut.kt       synthèse vocale en flux, nettoyage du markdown
+  AudioCapture.kt   oreille native : micro 16 kHz + détection de fin de parole
+  Library.kt        bibliothèque RAG hybride (BM25 + EmbeddingGemma 2, fusion RRF, SQLite)
+  Skills.kt         14 compétences (function calling) + mémoire longue
+  ReminderReceiver  rappels en notification
+  MathEval.kt       calculatrice exacte
   OrbView.kt        l'orbe animé (5 états)
   ModelStore.kt     catalogue, téléchargement (DownloadManager), import .litertlm
   ModelsDialog.kt / SettingsDialog.kt / Markdown.kt / Ui.kt / Prefs.kt / ChatStore.kt
@@ -63,14 +73,11 @@ app/src/main/java/com/application/nox/
 
 ## Catalogue (◉)
 
-| Modèle | Taille | Remarque |
+| Composant | Taille | Rôle |
 |---|---|---|
-| Gemma 4 E2B | 2,6 Go | conseillé, turbo MTP |
-| Gemma 4 E4B | 3,65 Go | plus intelligent, plus lent |
-| Qwen3 1.7B | 0,9 Go | très rapide, réflexion coupée |
-| Qwen3.5 0.8B | 1 Go | ultra léger, CPU |
-| Qwen3.5 4B | 2,75 Go | costaud, CPU uniquement |
-| Phi-4 mini | 3,9 Go | Microsoft, contexte 4K |
+| Gemma 4 E2B | 2,6 Go | cœur conseillé (rapide) |
+| Gemma 4 E4B | 3,65 Go | cœur puissance max |
+| EmbeddingGemma 2 | ~0,5 Go | recherche par le sens pour la bibliothèque |
 
-Autres modèles : colle un lien Hugging Face vers un `.litertlm` dans ◉ › « Depuis un lien Hugging Face », ou importe un fichier déjà présent sur le téléphone.
-Les modèles marqués CPU ignorent le réglage GPU (leur démarrage GPU sature les téléphones 8 Go). Le contexte est automatiquement limité à ce que chaque fichier accepte.
+Gemma 3n (E2B/E4B) fonctionne aussi : télécharge-le depuis ton navigateur (licence à accepter sur Hugging Face) puis ◉ › Importer.
+

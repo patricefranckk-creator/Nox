@@ -37,6 +37,7 @@ class LlmEngine(
     private val prefs: Prefs,
     private val store: ModelStore,
     private val skills: Skills,
+    private val library: Library,
 ) {
 
     interface StreamListener {
@@ -45,9 +46,11 @@ class LlmEngine(
         fun onError(msg: String)
         /** Écoute native : ce que Gemma a entendu (pour remplir la bulle de l'utilisateur). */
         fun onTranscript(text: String) {}
+        /** Bibliothèque : n extraits injectés automatiquement avant la réponse. */
+        fun onContext(n: Int) {}
     }
 
-    private data class Attempt(val kind: String, val mtp: Boolean, val ctx: Int, val audio: Boolean)
+    private data class Attempt(val kind: String, val mtp: Boolean, val ctx: Int, val audio: Boolean, val vision: Boolean)
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "nox-llm").apply { priority = Thread.MAX_PRIORITY } }
     private val main = Handler(Looper.getMainLooper())
@@ -61,6 +64,8 @@ class LlmEngine(
     var modelLabel = ""; private set
     /** Le modèle chargé accepte l'audio (écoute native possible). */
     var audioReady = false; private set
+    /** Le modèle chargé voit les images (vue 📷). */
+    var visionReady = false; private set
     /** Les compétences sont branchées sur la conversation en cours. */
     var skillsActive = false; private set
 
@@ -85,29 +90,34 @@ class LlmEngine(
             val info = probe(path)
             val mtpCapable = prefs.turbo && info.mtp
             toolsCapable = info.tools
-            val wantAudio = prefs.listenMode == "native" && hearsAudio(file.name)
+            val multimodal = isGemmaE(file.name)
+            val wantAudio = prefs.listenMode == "native" && multimodal
+            val wantVision = prefs.vision && multimodal
             val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true
             val ctxWanted = minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE)
 
+            // Cascade : d'abord tout (oreille + vue), puis on lâche la vue, puis l'oreille, puis le GPU.
             val attempts = mutableListOf<Attempt>()
-            for (audio in if (wantAudio) listOf(true, false) else listOf(false)) {
+            val modes = linkedSetOf(wantAudio to wantVision, wantAudio to false, false to false).toList()
+            for ((audio, vision) in modes) {
                 if (wantGpu) {
-                    if (mtpCapable) attempts += Attempt("GPU", true, ctxWanted, audio)
-                    attempts += Attempt("GPU", false, ctxWanted, audio)
+                    if (mtpCapable) attempts += Attempt("GPU", true, ctxWanted, audio, vision)
+                    attempts += Attempt("GPU", false, ctxWanted, audio, vision)
                 }
-                if (mtpCapable && !wantGpu) attempts += Attempt("CPU", true, ctxWanted, audio)
-                attempts += Attempt("CPU", false, ctxWanted, audio)
+                if (mtpCapable && !wantGpu) attempts += Attempt("CPU", true, ctxWanted, audio, vision)
+                attempts += Attempt("CPU", false, ctxWanted, audio, vision)
             }
-            if (ctxWanted > 4096) attempts += Attempt("CPU", false, 4096, false)
+            if (ctxWanted > 4096) attempts += Attempt("CPU", false, 4096, false, false)
 
             var lastErr: Throwable? = null
             for (a in attempts) {
-                post { onStatus("Démarrage ${a.kind}${if (a.mtp) " + turbo" else ""}${if (a.audio) " + oreille" else ""}…") }
+                post { onStatus("Démarrage ${a.kind}${if (a.mtp) " + turbo" else ""}${if (a.audio) " + oreille" else ""}${if (a.vision) " + vue" else ""}…") }
                 val t0 = System.currentTimeMillis()
                 try {
                     engine = createEngine(path, a)
                     ctxTokens = a.ctx
                     audioReady = a.audio
+                    visionReady = a.vision
                     backendLabel = a.kind + (if (a.mtp) "·MTP" else "")
                     Log.i(TAG, "Moteur prêt en ${System.currentTimeMillis() - t0} ms ($a)")
                     break
@@ -124,7 +134,7 @@ class LlmEngine(
                 post { onStatus("Préparation de la mémoire…") }
                 conversation = newConversation(history)
                 ready = true
-                val extras = listOfNotNull(if (audioReady) "oreille" else null, if (skillsActive) "compétences" else null)
+                val extras = listOfNotNull(if (audioReady) "oreille" else null, if (visionReady) "vue" else null, if (skillsActive) "compétences" else null)
                 post { onResult(true, "$modelLabel · $backendLabel" + if (extras.isEmpty()) "" else " · " + extras.joinToString(" + ")) }
             } catch (t: Throwable) {
                 Log.e(TAG, "createConversation", t)
@@ -145,8 +155,8 @@ class LlmEngine(
         Probe(false, true) // inconnu : on tente, la conversation se rabat sans outils si besoin
     }
 
-    /** Les modèles « E » de Gemma (3n, 4) embarquent un encodeur audio. */
-    private fun hearsAudio(name: String): Boolean {
+    /** Les modèles « E » de Gemma (3n, 4) embarquent des encodeurs audio et image. */
+    private fun isGemmaE(name: String): Boolean {
         val n = name.lowercase(Locale.ROOT)
         return (n.contains("gemma-4") || n.contains("gemma-3n") || n.contains("gemma4") || n.contains("gemma3n")) &&
             (n.contains("e2b") || n.contains("e4b"))
@@ -159,6 +169,7 @@ class LlmEngine(
             modelPath = path,
             backend = backend,
             audioBackend = if (a.audio) Backend.CPU(threadCount = 2) else null, // l'encodeur audio doit être sur CPU
+            visionBackend = if (a.vision) (if (a.kind == "GPU") Backend.GPU() else Backend.CPU(threadCount = bigCores())) else null,
             maxNumTokens = a.ctx,
             cacheDir = File(ctx.cacheDir, "litert").apply { mkdirs() }.absolutePath,
         )
@@ -184,9 +195,10 @@ class LlmEngine(
         sb.append("\n\nNous sommes le ").append(now).append('.')
         if (prefs.userName.isNotBlank()) sb.append(" Ton interlocuteur s'appelle ").append(prefs.userName.trim()).append('.')
         if (withSkills) {
-            sb.append("\n\nTu disposes d'outils sur le téléphone (heure, calcul, minuteur, alarme, notes, mémoire, lampe, volume, ")
-                .append("applis, agenda, état du téléphone). Utilise-les dès qu'ils rendent la réponse plus juste ou font l'action demandée ; ")
-                .append("pour tout calcul, appelle toujours l'outil calculer. Après un outil, confirme en une phrase naturelle.")
+            sb.append("\n\nTu agis vraiment sur le téléphone grâce à tes outils. Dès qu'on te demande une action ou une info du téléphone ")
+                .append("(heure, minuteur, rappel, liste, musique, appel, SMS, trajet, appli, réglage, agenda…), appelle l'outil au lieu de répondre de tête. ")
+                .append("Tout calcul passe par « calculer ». Si l'utilisateur évoque quelque chose qu'il t'a déjà dit, noté ou importé, cherche dans « bibliotheque ». ")
+                .append("Après une action, confirme en une phrase naturelle, sans détailler l'outil.")
         }
         sb.append(skills.memory.promptBlock())
         return sb.toString()
@@ -205,6 +217,8 @@ class LlmEngine(
         while (kept.isNotEmpty() && !kept.first().fromUser) kept.removeAt(0)
         val initial = kept.map { if (it.fromUser) Message.user(it.text) else Message.model(it.text) }
         val sampler = SamplerConfig(topK = 40, topP = 0.95, temperature = prefs.temperature.toDouble())
+
+        skills.conversationStart = kept.firstOrNull()?.time ?: System.currentTimeMillis()
 
         fun build(withSkills: Boolean): Conversation {
             val sys = systemPrompt(withSkills)
@@ -247,20 +261,41 @@ class LlmEngine(
 
     // ------------------------------------------------------------------ génération
 
-    fun send(text: String, history: List<ChatMsg>, l: StreamListener) = submit(Message.user(text), text.length, null, history, l)
+    /**
+     * Message texte. La bibliothèque est interrogée d'abord (quelques ms) : si des extraits nettement
+     * pertinents existent, ils sont glissés devant le message — Gemma répond avec, sans appel d'outil.
+     */
+    fun send(text: String, history: List<ChatMsg>, l: StreamListener, image: ByteArray? = null) {
+        if (busy) return
+        busy = true
+        worker.execute {
+            val hits = try {
+                if (prefs.ragAuto) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()
+            } catch (t: Throwable) { emptyList() }
+            val ctxBlock = library.contextBlock(hits)
+            if (hits.isNotEmpty()) post { l.onContext(hits.size) }
+            val full = if (ctxBlock.isEmpty()) text else ctxBlock + "\nMessage de l'utilisateur : " + text
+            val msg = if (image != null && visionReady)
+                Message.user(Contents.of(Content.ImageBytes(image), Content.Text(full.ifBlank { "Décris cette image." })))
+            else Message.user(full)
+            val extra = if (image != null) (280 * CHARS_PER_TOKEN).toInt() else 0
+            submitNow(msg, full.length + extra, null, history, l)
+        }
+    }
 
     /** Écoute native : le son brut part directement dans Gemma, qui transcrit puis répond. */
     fun sendAudio(wav: ByteArray, durationMs: Long, history: List<ChatMsg>, l: StreamListener) {
         val msg = Message.user(Contents.of(Content.AudioBytes(wav), Content.Text(AUDIO_INSTRUCTION)))
         // ~25 jetons audio par seconde chez Gemma
         val approxChars = ((durationMs / 1000.0) * 25 * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
-        submit(msg, approxChars, TranscriptExtractor(), history, l)
-    }
-
-    private fun submit(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener) {
         if (busy) return
         busy = true
-        worker.execute {
+        worker.execute { submitNow(msg, approxChars, TranscriptExtractor(), history, l) }
+    }
+
+    /** Toujours appelé sur le fil du modèle. */
+    private fun submitNow(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener) {
+        run {
             val projected = charsInContext + approxChars + 1200
             if (projected > ctxTokens * CHARS_PER_TOKEN * 0.80) {
                 Log.i(TAG, "Compactage du contexte")
@@ -271,7 +306,7 @@ class LlmEngine(
             if (conv == null) {
                 busy = false
                 post { l.onError("Le modèle n'est pas prêt") }
-                return@execute
+                return@run
             }
             charsInContext += approxChars
             val t0 = System.nanoTime()
@@ -342,6 +377,7 @@ class LlmEngine(
     private fun closeInternal() {
         ready = false
         audioReady = false
+        visionReady = false
         skillsActive = false
         try { conversation?.close() } catch (_: Throwable) {}
         try { engine?.close() } catch (_: Throwable) {}

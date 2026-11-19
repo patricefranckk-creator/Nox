@@ -65,6 +65,21 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("skills", true)
         set(v) = sp.edit().putBoolean("skills", v).apply()
 
+    /** Vue 📷 : charge l'encodeur d'images de Gemma E (un peu plus de mémoire). */
+    var vision: Boolean
+        get() = sp.getBoolean("vision", true)
+        set(v) = sp.edit().putBoolean("vision", v).apply()
+
+    /** Bibliothèque : injecter automatiquement les extraits pertinents avant chaque réponse. */
+    var ragAuto: Boolean
+        get() = sp.getBoolean("rag_auto", true)
+        set(v) = sp.edit().putBoolean("rag_auto", v).apply()
+
+    /** Mémoire épisodique : chaque échange devient cherchable dans les conversations futures. */
+    var rememberChats: Boolean
+        get() = sp.getBoolean("remember_chats", true)
+        set(v) = sp.edit().putBoolean("remember_chats", v).apply()
+
     var voiceName: String
         get() = sp.getString("voice", "") ?: ""
         set(v) = sp.edit().putString("voice", v).apply()
@@ -76,11 +91,12 @@ class Prefs(ctx: Context) {
 
     companion object {
         const val DEFAULT_PERSONA =
-            "Tu es Nox, une intelligence artificielle qui tourne entièrement sur ce téléphone, " +
-            "sans internet. Tu es vive, chaleureuse, directe, avec une pointe d'humour discret. " +
-            "Tu réponds en français. Tes réponses sont souvent lues à voix haute : fais des phrases " +
-            "naturelles et plutôt courtes, sans markdown, sans listes à puces ni émojis, sauf si " +
-            "on te demande explicitement du code, un tableau ou une liste. Si tu ne sais pas, " +
-            "dis-le franchement plutôt que d'inventer."
+            "Tu es Nox, l'assistant personnel qui vit dans ce téléphone, sans internet. " +
+            "Tu parles comme une vraie personne : chaleureux, direct, curieux, avec une pointe d'humour quand ça s'y prête. Tu tutoies. " +
+            "On te parle souvent à la voix ou en écrivant vite : comprends l'intention même si le message est approximatif ou mal orthographié, " +
+            "et ne demande une précision que si c'est vraiment ambigu. " +
+            "Adapte la longueur : une phrase ou deux pour une question simple ou une action, plus si on te demande d'expliquer. " +
+            "Tes réponses sont lues à voix haute : phrases naturelles, pas de markdown, pas de listes ni d'émojis, sauf si on demande du code, un tableau ou une liste. " +
+            "Ne dis jamais « en tant qu'IA ». Si tu ne sais pas, dis-le simplement plutôt que d'inventer."
     }
 }

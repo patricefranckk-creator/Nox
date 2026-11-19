@@ -13,6 +13,33 @@ import com.application.nox.Ui.text
 /** Panneau « ⚡ » : les compétences de Nox et ce qu'il a retenu de toi. */
 class SkillsDialog(private val a: MainActivity) {
 
+    companion object {
+        const val REQ_DOC = 4343
+
+        /** Lit un document texte choisi par l'utilisateur et l'ajoute à la bibliothèque. */
+        fun importDocument(a: MainActivity, uri: android.net.Uri) {
+            Thread {
+                try {
+                    var name = "document"
+                    a.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                        val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (c.moveToFirst() && i >= 0) name = c.getString(i) ?: name
+                    }
+                    val raw = a.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: error("lecture impossible")
+                    require(raw.size < 3_000_000) { "fichier trop gros (3 Mo max)" }
+                    var text = String(raw, Charsets.UTF_8)
+                    if (name.endsWith(".html", true) || name.endsWith(".htm", true) || name.endsWith(".xml", true))
+                        text = text.replace(Regex("(?s)<(script|style).*?</\\1>"), " ").replace(Regex("<[^>]+>"), " ")
+                            .replace("&nbsp;", " ").replace("&amp;", "&")
+                    val title = name.substringBeforeLast('.')
+                    a.library.addDocument(title, text) { n -> a.toast("« $title » ajouté à la bibliothèque ($n extrait${if (n > 1) "s" else ""})") }
+                } catch (t: Throwable) {
+                    a.runOnUiThread { a.toast("Import impossible : ${t.message}") }
+                }
+            }.start()
+        }
+    }
+
     private lateinit var body: LinearLayout
     private var changed = false
 
@@ -23,11 +50,27 @@ class SkillsDialog(private val a: MainActivity) {
         }
         render()
         AlertDialog.Builder(a)
-            .setTitle("Compétences & mémoire")
+            .setTitle("Compétences, mémoire & bibliothèque")
             .setView(ScrollView(a).apply { addView(body) })
             .setPositiveButton("Fermer", null)
             .setOnDismissListener { if (changed) a.applyConversationSettings() }
             .show()
+    }
+
+    private fun pasteDialog() {
+        val title = android.widget.EditText(a).apply { hint = "Titre (ex : Recette crêpes)"; setTextColor(Ui.TEXT); setHintTextColor(Ui.MUTED) }
+        val body2 = android.widget.EditText(a).apply {
+            hint = "Colle ou écris le texte ici"; setTextColor(Ui.TEXT); setHintTextColor(Ui.MUTED); minLines = 5; maxLines = 12
+            gravity = android.view.Gravity.TOP
+        }
+        val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(22), a.dp(8), a.dp(22), 0); addView(title); addView(body2) }
+        AlertDialog.Builder(a).setTitle("Ajouter un texte").setView(box)
+            .setPositiveButton("Ajouter") { _, _ ->
+                val t = body2.text.toString().trim()
+                if (t.isEmpty()) return@setPositiveButton
+                val name = title.text.toString().trim().ifEmpty { t.take(40).replace('\n', ' ') }
+                a.library.addDocument(name, t) { n -> a.toast("« $name » ajouté ($n extrait${if (n > 1) "s" else ""})"); render() }
+            }.setNegativeButton("Annuler", null).show()
     }
 
     private fun render() {
@@ -50,6 +93,58 @@ class SkillsDialog(private val a: MainActivity) {
             setOnCheckedChangeListener { _, v -> a.prefs.skillsEnabled = v; changed = true }
         }
         body.addView(sw)
+
+        // ---------------- Bibliothèque (RAG)
+        body.addView(a.sectionTitle("Bibliothèque (ce que Nox peut relire)"))
+        body.addView(a.text(a.library.stats(), 12.5f, Ui.CYAN))
+        if (!a.library.semantic) body.addView(a.text("Astuce : installe EmbeddingGemma 2 (◉) pour une recherche par le sens, pas seulement par mots-clés.", 12f, Ui.MUTED)
+            .apply { setPadding(0, a.dp(4), 0, 0) })
+        val docs = a.library.documents()
+        docs.forEach { (title, n) ->
+            body.addView(a.text("📄  $title  ·  $n extrait${if (n > 1) "s" else ""}", 14f, Ui.TEXT).apply {
+                setPadding(a.dp(12), a.dp(9), a.dp(12), a.dp(9))
+                background = Ui.ripple(Ui.rounded(Ui.SURFACE, a.dp(12).toFloat()))
+                layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(6) }
+                setOnClickListener {
+                    AlertDialog.Builder(a).setMessage("Retirer « $title » de la bibliothèque ?")
+                        .setPositiveButton("Retirer") { _, _ -> a.library.removeSource("doc:$title") { render() } }
+                        .setNegativeButton("Annuler", null).show()
+                }
+            })
+        }
+        val btns = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, a.dp(10), 0, 0) }
+        btns.addView(a.pillButton("Ajouter un document") {
+            @Suppress("DEPRECATION")
+            a.startActivityForResult(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(android.content.Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(android.content.Intent.EXTRA_MIME_TYPES, arrayOf("text/*", "application/json", "application/xml")), REQ_DOC)
+        })
+        btns.addView(a.pillButton("Coller un texte", filled = false) { pasteDialog() }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = a.dp(10) })
+        body.addView(btns)
+        body.addView(a.text("Formats texte : .txt .md .csv .json .html. Tu peux aussi partager un texte vers Nox depuis n'importe quelle appli.", 11.5f, Ui.MUTED)
+            .apply { setPadding(0, a.dp(6), 0, 0) })
+
+        @Suppress("DEPRECATION")
+        val swRag = Switch(a).apply {
+            text = "Consulter automatiquement la bibliothèque"
+            setTextColor(Ui.TEXT); isChecked = a.prefs.ragAuto
+            thumbTintList = ColorStateList.valueOf(Ui.ACCENT)
+            setOnCheckedChangeListener { _, v -> a.prefs.ragAuto = v }
+        }
+        body.addView(swRag)
+        @Suppress("DEPRECATION")
+        val swChats = Switch(a).apply {
+            text = "Se souvenir des anciennes conversations"
+            setTextColor(Ui.TEXT); isChecked = a.prefs.rememberChats
+            thumbTintList = ColorStateList.valueOf(Ui.ACCENT)
+            setOnCheckedChangeListener { _, v -> a.prefs.rememberChats = v }
+        }
+        body.addView(swChats)
+        body.addView(a.pillButton("Effacer les conversations mémorisées", filled = false) {
+            AlertDialog.Builder(a).setMessage("Effacer tous les échanges mémorisés de la bibliothèque ?")
+                .setPositiveButton("Effacer") { _, _ -> a.library.clearConversations { render() } }
+                .setNegativeButton("Annuler", null).show()
+        }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(6) } })
 
         body.addView(a.sectionTitle("Ce que Nox sait faire"))
         a.skills.all.forEach { s ->

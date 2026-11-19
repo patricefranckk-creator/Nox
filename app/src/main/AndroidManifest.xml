@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Compétences : minuteur et réveil dans l'appli Horloge -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Compétence « contacter » : retrouver le numéro d'un proche (demandée seulement au premier usage) -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
 
     <queries>
         <intent>
@@ -23,6 +25,10 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="google.navigation" />
         </intent>
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />
@@ -46,12 +52,21 @@
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Partager un texte vers Nox depuis n'importe quelle appli -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
+
+        <receiver android:name=".ReminderReceiver" android:exported="false" />
 
         <!-- Accélération GPU (Adreno) pour LiteRT-LM -->
         <uses-native-library android:name="libvndksupport.so" android:required="false" />

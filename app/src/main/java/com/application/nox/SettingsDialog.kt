@@ -29,6 +29,7 @@ class SettingsDialog(private val a: MainActivity) {
         val oldBackend = p.backend
         val oldTurbo = p.turbo
         val oldCtx = p.contextTokens
+        val oldVision = p.vision
         val oldPersona = p.persona
         val oldTemp = p.temperature
         val oldName = p.userName
@@ -114,6 +115,8 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(backend)
         val turbo = switch("Turbo MTP (décodage spéculatif)", p.turbo)
         body.addView(turbo)
+        val vision = switch("Vue 📷 : Gemma regarde tes photos (+ ~300 Mo de RAM)", p.vision)
+        body.addView(vision)
         body.addView(label("Mémoire de travail (contexte)"))
         val ctx = radios(listOf("2048" to "2K · le plus rapide", "4096" to "4K · conseillé", "8192" to "8K · longues discussions"), p.contextTokens.toString())
         body.addView(ctx)
@@ -134,10 +137,11 @@ class SettingsDialog(private val a: MainActivity) {
                 commitVoice()
                 p.backend = checkedTag(backend) ?: "gpu"
                 p.turbo = turbo.isChecked
+                p.vision = vision.isChecked
                 p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
                 p.listenMode = checkedTag(listen) ?: "native"
 
-                val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen
+                val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen || p.vision != oldVision
                 val reconv = p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
                 when {
                     reload -> { a.applyLightSettings(); a.loadModel() }

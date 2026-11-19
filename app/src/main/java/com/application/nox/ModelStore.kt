@@ -24,6 +24,8 @@ class ModelStore(private val ctx: Context) {
         val cpuOnly: Boolean = false,
         /** Taille de contexte maximale compilée dans le fichier. */
         val maxCtx: Int = 8192,
+        /** Taille minimale pour considérer le fichier complet. */
+        val minBytes: Long = (sizeBytes * 0.9).toLong(),
     )
 
     val catalog = listOf(
@@ -41,41 +43,26 @@ class ModelStore(private val ctx: Context) {
             3_650_000_000L,
             "Nettement plus intelligent, environ 2× plus lent. Ferme les autres applis : la RAM sera juste.",
         ),
-        Spec(
-            "qwen3-1.7b", "Qwen3 1.7B  ·  petit et vif",
-            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm",
-            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm",
-            932_000_000L,
-            "Moins d'1 Go, très rapide sur CPU. Le mode « réflexion » est coupé pour répondre tout de suite.",
-            maxCtx = 4096,
-        ),
-        Spec(
-            "qwen35-0.8b", "Qwen3.5 0.8B  ·  ultra léger",
-            "Qwen3.5-0.8B_int8.litertlm",
-            "https://huggingface.co/litert-community/Qwen3.5-0.8B/resolve/main/Qwen3.5-0.8B_int8.litertlm",
-            964_566_992L,
-            "Le plus rapide de tous, réponses simples. Tourne en CPU (plus rapide que le GPU pour ce modèle).",
-            cpuOnly = true, maxCtx = 4096,
-        ),
-        Spec(
-            "qwen35-4b", "Qwen3.5 4B  ·  costaud",
-            "Qwen3.5-4B_mixed_int4.litertlm",
-            "https://huggingface.co/litert-community/Qwen3.5-4B/resolve/main/Qwen3.5-4B_mixed_int4.litertlm",
-            2_754_166_784L,
-            "Génération récente, raisonne bien. CPU uniquement : son démarrage GPU sature les téléphones 8 Go.",
-            cpuOnly = true, maxCtx = 4096,
-        ),
-        Spec(
-            "phi4-mini", "Phi-4 mini  ·  Microsoft",
-            "Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.litertlm",
-            "https://huggingface.co/litert-community/Phi-4-mini-instruct/resolve/main/Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.litertlm",
-            3_910_000_000L,
-            "3,8 milliards de paramètres, logique solide, plus lent. Son français est correct sans plus.",
-            maxCtx = 4096,
-        ),
     )
 
+    /**
+     * Mémoire sémantique : EmbeddingGemma 2 (même famille que le cœur), utilisé par la bibliothèque (RAG)
+     * pour chercher par le sens. Seul l'encodeur texte est chargé (~200 Mo de RAM).
+     */
+    val embedSpec = Spec(
+        "embeddinggemma2", "EmbeddingGemma 2  ·  mémoire sémantique",
+        "embeddinggemma-2-740m.litertlm",
+        "https://huggingface.co/litert-community/embeddinggemma-2-740m-litert-lm/resolve/main/embeddinggemma-2-740m.litertlm",
+        485_000_000L,
+        minBytes = 120_000_000L,
+        pitch = "Fait chercher Nox par le sens dans tes notes, documents et anciennes conversations (« dentiste » retrouve « RDV Dr Martin »). Sans lui, la recherche se fait par mots-clés.",
+    )
+
+    fun embedFile(): File? = fileFor(embedSpec).takeIf { isInstalled(embedSpec) && activeDownloadId(embedSpec) < 0 }
+
     fun specForFile(name: String): Spec? = catalog.firstOrNull { it.file == name }
+
+    private fun isEmbedding(name: String) = name.lowercase().contains("embedding")
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -87,20 +74,20 @@ class ModelStore(private val ctx: Context) {
 
     fun isInstalled(s: Spec): Boolean {
         val f = fileFor(s)
-        return f.exists() && f.length() > s.sizeBytes * 0.9
+        return f.exists() && f.length() > s.minBytes
     }
 
     /** Tous les .litertlm présents (catalogue + imports). */
     fun localModels(): List<File> {
         val busy = downloadingFiles()
-        return dir().listFiles { f -> f.isFile && f.name.endsWith(".litertlm") && f.name !in busy }
+        return dir().listFiles { f -> f.isFile && f.name.endsWith(".litertlm") && f.name !in busy && !isEmbedding(f.name) }
             ?.sortedBy { it.name }.orEmpty()
     }
 
     /** Fichiers en cours de téléchargement (catalogue + liens perso) : jamais proposés tant qu'incomplets. */
     fun downloadingFiles(): Set<String> {
         val out = HashSet<String>()
-        catalog.forEach { if (activeDownloadId(it) >= 0) out += it.file }
+        (catalog + embedSpec).forEach { if (activeDownloadId(it) >= 0) out += it.file }
         customDownloads().forEach { (file, id) -> if (isActive(id)) out += file }
         return out
     }

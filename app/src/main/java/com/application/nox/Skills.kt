@@ -1,17 +1,27 @@
 package com.application.nox
 
+import android.Manifest
+import android.app.ActivityManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.CalendarContract
-import android.app.ActivityManager
+import android.provider.ContactsContract
+import android.provider.MediaStore
+import android.provider.Settings
+import android.view.KeyEvent
 import com.google.ai.edge.litertlm.OpenApiTool
 import com.google.ai.edge.litertlm.ToolProvider
 import com.google.ai.edge.litertlm.tool
@@ -24,191 +34,276 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Les compétences de Nox : de vrais outils que le modèle peut appeler tout seul (function calling),
- * 100 % locaux. Chaque compétence = une description JSON courte + une action Android.
+ * Les compétences de Nox : de vrais outils appelés par Gemma (function calling), 100 % locaux.
+ * Peu d'outils mais polyvalents (paramètre « action ») : moins de texte à pré-calculer au démarrage,
+ * et un petit modèle choisit mieux parmi 14 outils clairs que parmi 30.
  */
-class Skills(private val ctx: Context) {
+class Skills(private val ctx: Context, private val library: Library) {
 
-    /** Prévient l'interface qu'une action a été faite (affichée sous forme de puce). */
+    /** Puce affichée dans le chat quand une action est faite. */
     var onUsed: ((label: String) -> Unit)? = null
+    /** Demande d'autorisation Android (contacts…) déléguée à l'activité. */
+    var askPermission: ((String) -> Unit)? = null
+    /** Les échanges plus récents que ça sont déjà dans le contexte : inutile de les rechercher. */
+    @Volatile var conversationStart = System.currentTimeMillis()
 
     private val main = Handler(Looper.getMainLooper())
     val memory = LongMemory(ctx)
     private val notesFile = File(ctx.filesDir, "notes.json")
-    private var torchOn = false
 
     data class Skill(val name: String, val title: String, val description: String, val params: JSONObject, val run: (JSONObject) -> String)
 
-    // ------------------------------------------------------------------ catalogue
+    // ================================================================ catalogue
 
     val all: List<Skill> = listOf(
-        Skill("heure_date", "Heure et date", "Donne l'heure, la date et le jour actuels.", schema()) {
-            val now = Date()
+        Skill("heure_date", "Heure et date", "Heure, date et jour actuels.", obj()) {
             used("🕒 heure")
-            SimpleDateFormat("EEEE d MMMM yyyy, HH'h'mm", Locale.FRANCE).format(now)
+            SimpleDateFormat("EEEE d MMMM yyyy, HH'h'mm", Locale.FRANCE).format(Date())
         },
 
-        Skill("calculer", "Calculatrice", "Calcule une expression mathématique exacte (+ - * / ^ % parenthèses, sqrt, pourcentages).",
-            schema("expression" to "expression, ex: (12.5*3)+sqrt(16)")) { p ->
-            val expr = p.optString("expression")
-            val r = MathEval.eval(expr)
-            used("🧮 $expr")
-            MathEval.format(r)
+        Skill("calculer", "Calculatrice", "Calcul exact. À utiliser pour TOUT calcul (+ - * / ^ %, parenthèses, sqrt, « 20% de 150 »).",
+            obj("expression" to str("expression mathématique"))) { p ->
+            val e = p.optString("expression")
+            used("🧮 $e")
+            MathEval.format(MathEval.eval(e))
         },
 
-        Skill("minuteur", "Minuteur", "Lance un minuteur dans l'application Horloge.",
-            schema("secondes" to "durée totale en secondes", "nom" to "libellé facultatif", required = listOf("secondes"))) { p ->
-            val s = p.optInt("secondes", 0)
-            require(s in 1..86_400) { "durée invalide" }
-            start(Intent(AlarmClock.ACTION_SET_TIMER)
-                .putExtra(AlarmClock.EXTRA_LENGTH, s)
-                .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("nom", "Nox"))
-                .putExtra(AlarmClock.EXTRA_SKIP_UI, true))
-            used("⏱ minuteur ${human(s)}")
-            "Minuteur de ${human(s)} lancé."
+        Skill("horloge", "Minuteur & réveil", "Lance un minuteur ou programme une alarme dans l'appli Horloge.",
+            obj("action" to enum("minuteur", "alarme"), "secondes" to int("durée du minuteur en secondes"),
+                "heure" to int("heure de l'alarme 0-23"), "minute" to int("minute de l'alarme 0-59"), "nom" to str("libellé"),
+                required = listOf("action"))) { p ->
+            if (p.optString("action") == "minuteur") {
+                val s = p.optInt("secondes", 0)
+                require(s in 1..86_400) { "durée invalide" }
+                start(Intent(AlarmClock.ACTION_SET_TIMER).putExtra(AlarmClock.EXTRA_LENGTH, s)
+                    .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("nom", "Nox")).putExtra(AlarmClock.EXTRA_SKIP_UI, true))
+                used("⏱ ${human(s)}")
+                "Minuteur de ${human(s)} lancé."
+            } else {
+                val h = p.optInt("heure", -1); val m = p.optInt("minute", 0)
+                require(h in 0..23 && m in 0..59) { "heure invalide" }
+                start(Intent(AlarmClock.ACTION_SET_ALARM).putExtra(AlarmClock.EXTRA_HOUR, h).putExtra(AlarmClock.EXTRA_MINUTES, m)
+                    .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("nom", "Nox")).putExtra(AlarmClock.EXTRA_SKIP_UI, true))
+                used(hm("⏰ ", h, m))
+                hm("Alarme réglée à ", h, m) + "."
+            }
         },
 
-        Skill("alarme", "Réveil", "Programme une alarme dans l'application Horloge.",
-            schema("heure" to "heure 0-23", "minute" to "minute 0-59", "nom" to "libellé facultatif", required = listOf("heure", "minute"))) { p ->
-            val h = p.optInt("heure", -1); val m = p.optInt("minute", 0)
-            require(h in 0..23 && m in 0..59) { "heure invalide" }
-            start(Intent(AlarmClock.ACTION_SET_ALARM)
-                .putExtra(AlarmClock.EXTRA_HOUR, h)
-                .putExtra(AlarmClock.EXTRA_MINUTES, m)
-                .putExtra(AlarmClock.EXTRA_MESSAGE, p.optString("nom", "Nox"))
-                .putExtra(AlarmClock.EXTRA_SKIP_UI, true))
-            used(String.format(Locale.FRANCE, "⏰ alarme %02dh%02d", h, m))
-            String.format(Locale.FRANCE, "Alarme réglée à %02dh%02d.", h, m)
+        Skill("rappel", "Rappels", "Programme un rappel : une notification de Nox à un moment donné (dans X minutes, ou à une heure précise).",
+            obj("texte" to str("ce qu'il faut rappeler"), "dans_minutes" to int("délai en minutes"),
+                "heure" to int("heure 0-23 (si heure précise)"), "minute" to int("minute 0-59"), required = listOf("texte"))) { p ->
+            val txt = p.optString("texte").trim()
+            require(txt.isNotEmpty()) { "texte vide" }
+            val at: Long = if (p.has("heure")) {
+                val c = Calendar.getInstance()
+                c.set(Calendar.HOUR_OF_DAY, p.optInt("heure")); c.set(Calendar.MINUTE, p.optInt("minute", 0)); c.set(Calendar.SECOND, 0)
+                if (c.timeInMillis <= System.currentTimeMillis()) c.add(Calendar.DAY_OF_YEAR, 1)
+                c.timeInMillis
+            } else System.currentTimeMillis() + p.optInt("dans_minutes", 0).coerceAtLeast(1) * 60_000L
+            ReminderReceiver.schedule(ctx, at, txt)
+            val label = SimpleDateFormat("EEEE HH'h'mm", Locale.FRANCE).format(Date(at))
+            used("🔔 $label")
+            "Rappel programmé pour $label : $txt"
         },
 
-        Skill("memoriser", "Mémoire longue", "Retient durablement un fait important sur l'utilisateur (préférence, proche, projet). À utiliser quand il demande de retenir quelque chose.",
-            schema("fait" to "le fait, en une phrase courte")) { p ->
-            val f = p.optString("fait").trim()
-            require(f.isNotEmpty()) { "fait vide" }
-            memory.add(f)
-            used("🧠 retenu")
-            "Retenu : $f"
-        },
-
-        Skill("oublier", "Oubli", "Supprime de la mémoire longue les faits qui contiennent ce mot-clé.",
-            schema("mot_cle" to "mot-clé du fait à oublier")) { p ->
-            val n = memory.forget(p.optString("mot_cle"))
-            used("🧠 oubli ×$n")
-            if (n == 0) "Aucun souvenir ne correspond." else "$n souvenir(s) effacé(s)."
-        },
-
-        Skill("note", "Notes", "Ajoute une note ou un élément à une liste (courses, idées, à faire…).",
-            schema("liste" to "nom de la liste, ex: courses", "texte" to "contenu à ajouter")) { p ->
-            val list = p.optString("liste", "notes").lowercase(Locale.FRANCE).trim().ifEmpty { "notes" }
-            val text = p.optString("texte").trim()
-            require(text.isNotEmpty()) { "texte vide" }
+        Skill("notes", "Notes & listes", "Gère les listes de l'utilisateur (courses, idées, à faire…) : ajouter, lire, retirer un élément, vider.",
+            obj("action" to enum("ajouter", "lire", "retirer", "vider"), "liste" to str("nom de la liste, ex: courses"),
+                "texte" to str("élément(s) à ajouter ou retirer"), required = listOf("action"))) { p ->
+            val list = p.optString("liste").lowercase(Locale.FRANCE).trim().ifEmpty { "notes" }
             val all = loadNotes()
-            val arr = all.optJSONArray(list) ?: JSONArray().also { all.put(list, it) }
-            arr.put(text)
+            val arr = all.optJSONArray(list) ?: JSONArray()
+            val items = (0 until arr.length()).map { arr.getString(it) }.toMutableList()
+            val txt = p.optString("texte").trim()
+            val res = when (p.optString("action")) {
+                "ajouter" -> {
+                    require(txt.isNotEmpty()) { "texte vide" }
+                    txt.split(Regex("\\s*[,;]\\s*|\\s+et\\s+")).filter { it.isNotBlank() }
+                        .forEach { if (items.none { i -> i.equals(it, true) }) items += it }
+                    used("📝 $list"); "Ajouté à « $list » (${items.size} élément(s))."
+                }
+                "retirer" -> {
+                    val before = items.size
+                    items.removeAll { Text.fold(it).contains(Text.fold(txt)) }
+                    used("📝 $list"); if (items.size < before) "Retiré de « $list »." else "Rien de tel dans « $list »."
+                }
+                "vider" -> { items.clear(); used("📝 $list vidée"); "Liste « $list » vidée." }
+                else -> {
+                    used("📝 lecture")
+                    if (p.optString("liste").isBlank() && all.length() > 0)
+                        all.keys().asSequence().joinToString(" | ") { k ->
+                            "$k : " + all.getJSONArray(k).let { a -> (0 until a.length()).joinToString(", ") { a.getString(it) } }
+                        }
+                    else if (items.isEmpty()) "La liste « $list » est vide." else "« $list » : " + items.joinToString(", ")
+                }
+            }
+            if (items.isEmpty()) all.remove(list) else all.put(list, JSONArray(items))
             notesFile.writeText(all.toString())
-            used("📝 $list")
-            "Ajouté à la liste « $list » (${arr.length()} élément(s))."
+            library.syncNotes(list, items)
+            res
         },
 
-        Skill("lire_notes", "Lecture des notes", "Lit le contenu d'une liste de notes, ou toutes les listes si aucun nom.",
-            schema("liste" to "nom de la liste (facultatif)", required = emptyList())) { p ->
-            val all = loadNotes()
-            val wanted = p.optString("liste").lowercase(Locale.FRANCE).trim()
-            used("📝 lecture")
-            if (wanted.isNotEmpty()) {
-                val arr = all.optJSONArray(wanted) ?: return@Skill "La liste « $wanted » est vide."
-                (0 until arr.length()).joinToString("; ") { arr.getString(it) }
-            } else if (all.length() == 0) "Aucune note." else
-                all.keys().asSequence().joinToString(" | ") { k -> "$k : " + all.getJSONArray(k).let { a -> (0 until a.length()).joinToString(", ") { a.getString(it) } } }
+        Skill("memoire", "Mémoire longue", "Retient ou oublie durablement un fait sur l'utilisateur (préférence, proche, habitude). Quand il dit « retiens », « souviens-toi », « oublie ».",
+            obj("action" to enum("retenir", "oublier"), "texte" to str("le fait (retenir) ou un mot-clé (oublier)"))) { p ->
+            val t = p.optString("texte").trim()
+            require(t.isNotEmpty()) { "texte vide" }
+            if (p.optString("action") == "oublier") {
+                val n = memory.forget(t); used("🧠 oubli")
+                if (n == 0) "Aucun souvenir ne correspond." else "$n souvenir(s) effacé(s)."
+            } else { memory.add(t); used("🧠 retenu"); "Retenu : $t" }
         },
 
-        Skill("vider_liste", "Vider une liste", "Efface entièrement une liste de notes.",
-            schema("liste" to "nom de la liste")) { p ->
-            val all = loadNotes()
-            val l = p.optString("liste").lowercase(Locale.FRANCE).trim()
-            all.remove(l); notesFile.writeText(all.toString())
-            used("📝 $l vidée")
-            "Liste « $l » effacée."
+        Skill("bibliotheque", "Bibliothèque", "Cherche dans les documents, notes et anciennes conversations de l'utilisateur. Quand il parle de quelque chose qu'il t'a déjà dit, écrit ou importé.",
+            obj("requete" to str("mots-clés ou question précise"))) { p ->
+            val hits = library.search(p.optString("requete"), k = 4, excludeChatsAfter = conversationStart)
+            used("📚 ${hits.size} extrait(s)")
+            if (hits.isEmpty()) "Rien trouvé dans la bibliothèque." else hits.joinToString("\n") { "• ${it.chunk.title} : ${it.chunk.text}" }.take(2400)
         },
 
-        Skill("lampe", "Lampe torche", "Allume ou éteint la lampe torche.",
-            schema("allumer" to "true pour allumer, false pour éteindre")) { p ->
-            val on = p.optBoolean("allumer", !torchOn)
-            val cm = ctx.getSystemService(CameraManager::class.java)
-            val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
-                ?: return@Skill "Pas de flash sur ce téléphone."
-            cm.setTorchMode(id, on); torchOn = on
-            used(if (on) "🔦 allumée" else "🔦 éteinte")
-            if (on) "Lampe allumée." else "Lampe éteinte."
+        Skill("musique", "Musique", "Contrôle la musique : jouer un titre/artiste/playlist, pause, reprendre, suivant, précédent.",
+            obj("action" to enum("jouer", "pause", "reprendre", "suivant", "precedent"), "recherche" to str("titre, artiste ou playlist"),
+                required = listOf("action"))) { p ->
+            when (p.optString("action")) {
+                "jouer" -> {
+                    val q = p.optString("recherche").trim()
+                    if (q.isEmpty()) { mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY); used("▶ lecture"); "Lecture." } else {
+                        start(Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+                            .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+                            .putExtra(android.app.SearchManager.QUERY, q))
+                        used("🎵 $q"); "Je lance « $q »."
+                    }
+                }
+                "pause" -> { mediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE); used("⏸ pause"); "Pause." }
+                "reprendre" -> { mediaKey(KeyEvent.KEYCODE_MEDIA_PLAY); used("▶ lecture"); "C'est reparti." }
+                "suivant" -> { mediaKey(KeyEvent.KEYCODE_MEDIA_NEXT); used("⏭ suivant"); "Morceau suivant." }
+                else -> { mediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS); used("⏮ précédent"); "Morceau précédent." }
+            }
         },
 
-        Skill("volume", "Volume", "Règle le volume multimédia en pourcentage.",
-            schema("pourcent" to "0 à 100")) { p ->
-            val am = ctx.getSystemService(AudioManager::class.java)
-            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val pc = p.optInt("pourcent", 50).coerceIn(0, 100)
-            am.setStreamVolume(AudioManager.STREAM_MUSIC, (max * pc + 50) / 100, 0)
-            used("🔊 $pc %")
-            "Volume réglé à $pc %."
+        Skill("contacter", "Appels & SMS", "Prépare un appel ou un SMS vers un contact ou un numéro. L'utilisateur valide lui-même.",
+            obj("mode" to enum("appel", "sms"), "destinataire" to str("nom du contact ou numéro"), "message" to str("texte du SMS"),
+                required = listOf("mode", "destinataire"))) { p ->
+            val who = p.optString("destinataire").trim()
+            val number = if (who.count { it.isDigit() } >= 6) who else lookupNumber(who) ?: return@Skill missingContact(who)
+            if (p.optString("mode") == "sms") {
+                start(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(number))).putExtra("sms_body", p.optString("message")))
+                used("💬 $who"); "Le SMS pour $who est prêt, il ne reste qu'à l'envoyer."
+            } else {
+                start(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(number))))
+                used("📞 $who"); "Le numéro de $who est composé, il reste à appuyer sur appeler."
+            }
         },
 
-        Skill("etat_telephone", "État du téléphone", "Donne la batterie, la charge, la mémoire vive et le stockage libre.", schema()) {
-            val bat = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val lvl = bat?.let { it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) * 100 / it.getIntExtra(BatteryManager.EXTRA_SCALE, 100) } ?: -1
-            val plugged = (bat?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
-            val mi = ActivityManager.MemoryInfo().also { ctx.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
-            val free = ctx.filesDir.usableSpace
-            used("📱 état")
-            "Batterie $lvl %${if (plugged) " (en charge)" else ""}. RAM libre ${"%.1f".format(Locale.FRANCE, mi.availMem / 1e9)} Go sur ${"%.1f".format(Locale.FRANCE, mi.totalMem / 1e9)}. Stockage libre ${"%.0f".format(Locale.FRANCE, free / 1e9)} Go."
+        Skill("itineraire", "Itinéraire", "Ouvre la navigation GPS vers une destination.",
+            obj("destination" to str("adresse ou lieu"), "mode" to enum("voiture", "pied", "velo", "transports"), required = listOf("destination"))) { p ->
+            val dest = p.optString("destination")
+            val m = when (p.optString("mode")) { "pied" -> "w"; "velo" -> "b"; "transports" -> "r"; else -> "d" }
+            val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${Uri.encode(dest)}&mode=$m"))
+            if (nav.resolveActivity(ctx.packageManager) != null) start(nav)
+            else start(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(dest)}")))
+            used("🧭 $dest"); "Itinéraire vers $dest ouvert."
         },
 
-        Skill("ouvrir_appli", "Ouvrir une appli", "Ouvre une application installée à partir de son nom.",
-            schema("nom" to "nom de l'application, ex: Deezer")) { p ->
-            val q = norm(p.optString("nom"))
+        Skill("ouvrir", "Ouvrir", "Ouvre une application installée (par son nom) ou une page système : wifi, bluetooth, son, affichage, batterie, localisation, appareil photo, réglages.",
+            obj("cible" to str("nom de l'appli ou page système"))) { p ->
+            val raw = p.optString("cible")
+            val q = norm(raw)
+            val sys = when {
+                q.contains("wifi") -> Settings.Panel.ACTION_WIFI
+                q.contains("bluetooth") -> Settings.ACTION_BLUETOOTH_SETTINGS
+                q.contains("internet") || q.contains("donnees") -> Settings.Panel.ACTION_INTERNET_CONNECTIVITY
+                q == "son" || q.contains("volume") || q.contains("sonnerie") -> Settings.Panel.ACTION_VOLUME
+                q.contains("affichage") || q.contains("luminosite") || q.contains("ecran") -> Settings.ACTION_DISPLAY_SETTINGS
+                q.contains("batterie") -> Intent.ACTION_POWER_USAGE_SUMMARY
+                q.contains("localisation") || q.contains("gps") -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+                q.contains("photo") || q.contains("camera") -> MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA
+                q == "reglages" || q == "parametres" -> Settings.ACTION_SETTINGS
+                else -> null
+            }
+            if (sys != null) { start(Intent(sys)); used("⚙ $raw"); return@Skill "$raw ouvert." }
             val pm = ctx.packageManager
-            val launchers = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-            val best = launchers.map { it to norm(it.loadLabel(pm).toString()) }
-                .filter { (_, label) -> label.contains(q) || q.contains(label) }
-                .minByOrNull { (_, label) -> label.length }?.first
-                ?: return@Skill "Aucune application « ${p.optString("nom")} » trouvée."
+            val best = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                .map { it to norm(it.loadLabel(pm).toString()) }
+                .filter { (_, l) -> l.isNotEmpty() && (l.contains(q) || q.contains(l)) }
+                .minByOrNull { (_, l) -> l.length }?.first ?: return@Skill "Aucune application « $raw » trouvée."
             val label = best.loadLabel(pm).toString()
             start(pm.getLaunchIntentForPackage(best.activityInfo.packageName) ?: return@Skill "Impossible d'ouvrir $label.")
-            used("📲 $label")
-            "$label ouverte."
+            used("📲 $label"); "$label ouverte."
         },
 
-        Skill("evenement_agenda", "Agenda", "Prépare un événement dans l'agenda (l'utilisateur valide à l'écran).",
-            schema("titre" to "titre", "date" to "date AAAA-MM-JJ", "heure" to "heure HH:MM (facultatif)",
-                "duree_minutes" to "durée (facultatif, 60 par défaut)", required = listOf("titre", "date"))) { p ->
+        Skill("telephone", "Téléphone", "Lampe torche, volume multimédia, ou état du téléphone (batterie, mémoire, stockage).",
+            obj("action" to enum("lampe_allumer", "lampe_eteindre", "volume", "etat"), "valeur" to int("volume en pourcentage 0-100"),
+                required = listOf("action"))) { p ->
+            when (p.optString("action")) {
+                "lampe_allumer", "lampe_eteindre" -> {
+                    val on = p.optString("action") == "lampe_allumer"
+                    val cm = ctx.getSystemService(CameraManager::class.java)
+                    val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
+                        ?: return@Skill "Pas de flash sur ce téléphone."
+                    cm.setTorchMode(id, on)
+                    used(if (on) "🔦 allumée" else "🔦 éteinte"); if (on) "Lampe allumée." else "Lampe éteinte."
+                }
+                "volume" -> {
+                    val am = ctx.getSystemService(AudioManager::class.java)
+                    val pc = p.optInt("valeur", 50).coerceIn(0, 100)
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, (am.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * pc + 50) / 100, 0)
+                    used("🔊 $pc %"); "Volume à $pc %."
+                }
+                else -> {
+                    val bat = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                    val lvl = bat?.let { it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) * 100 / it.getIntExtra(BatteryManager.EXTRA_SCALE, 100) } ?: -1
+                    val plugged = (bat?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+                    val mi = ActivityManager.MemoryInfo().also { ctx.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
+                    used("📱 état")
+                    String.format(Locale.FRANCE, "Batterie %d %%%s. RAM libre %.1f Go sur %.1f. Stockage libre %.0f Go.",
+                        lvl, if (plugged) " (en charge)" else "", mi.availMem / 1e9, mi.totalMem / 1e9, ctx.filesDir.usableSpace / 1e9)
+                }
+            }
+        },
+
+        Skill("agenda", "Agenda", "Prépare un événement dans l'agenda (l'utilisateur valide à l'écran).",
+            obj("titre" to str("titre"), "date" to str("date AAAA-MM-JJ"), "heure" to str("heure HH:MM, vide si toute la journée"),
+                "duree_minutes" to int("durée, 60 par défaut"), required = listOf("titre", "date"))) { p ->
             val cal = Calendar.getInstance()
-            val d = SimpleDateFormat("yyyy-MM-dd", Locale.FRANCE).parse(p.optString("date")) ?: error("date invalide")
-            cal.time = d
+            cal.time = SimpleDateFormat("yyyy-MM-dd", Locale.FRANCE).parse(p.optString("date")) ?: error("date invalide")
             val time = p.optString("heure")
             val allDay = time.isBlank()
             if (!allDay) {
-                val (h, m) = time.split(":", "h").map { it.trim().toIntOrNull() ?: 0 } + listOf(0, 0)
-                cal.set(Calendar.HOUR_OF_DAY, h); cal.set(Calendar.MINUTE, m)
+                val hm = time.split(":", "h").map { it.trim().toIntOrNull() ?: 0 } + listOf(0, 0)
+                cal.set(Calendar.HOUR_OF_DAY, hm[0]); cal.set(Calendar.MINUTE, hm[1])
             }
             val start = cal.timeInMillis
-            val end = start + p.optInt("duree_minutes", 60) * 60_000L
             start(Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
                 .putExtra(CalendarContract.Events.TITLE, p.optString("titre"))
                 .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
-                .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, end)
+                .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, start + p.optInt("duree_minutes", 60) * 60_000L)
                 .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, allDay))
-            used("📅 ${p.optString("titre")}")
-            "L'agenda est ouvert avec l'événement prêt : il reste à valider."
+            used("📅 ${p.optString("titre")}"); "L'événement est prêt dans l'agenda, il reste à valider."
+        },
+
+        Skill("partager", "Partager & copier", "Partage un texte vers une autre appli, le copie dans le presse-papier, ou lance une recherche web dans le navigateur.",
+            obj("action" to enum("partager", "copier", "recherche_web"), "texte" to str("texte ou requête"))) { p ->
+            val t = p.optString("texte")
+            when (p.optString("action")) {
+                "copier" -> {
+                    main.post { ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Nox", t)) }
+                    used("📋 copié"); "Copié dans le presse-papier."
+                }
+                "recherche_web" -> {
+                    start(Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, t))
+                    used("🌐 $t"); "Recherche lancée dans le navigateur."
+                }
+                else -> {
+                    start(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, t), "Partager"))
+                    used("↗ partage"); "Choisis l'appli pour partager."
+                }
+            }
         },
     )
 
-    /** Outils au format attendu par LiteRT-LM. */
     fun providers(): List<ToolProvider> = all.map { s ->
         tool(object : OpenApiTool {
-            override fun getToolDescriptionJsonString(): String = JSONObject()
-                .put("name", s.name)
-                .put("description", s.description)
-                .put("parameters", s.params)
-                .toString()
+            override fun getToolDescriptionJsonString(): String =
+                JSONObject().put("name", s.name).put("description", s.description).put("parameters", s.params).toString()
 
             override fun execute(paramsJsonString: String): String = try {
                 s.run(JSONObject(paramsJsonString.ifBlank { "{}" }))
@@ -218,21 +313,56 @@ class Skills(private val ctx: Context) {
         })
     }
 
-    // ------------------------------------------------------------------ outils internes
+    // ================================================================ aides
 
-    private fun used(label: String) = main.post { onUsed?.invoke(label) }
+    private fun used(label: String) { main.post { onUsed?.invoke(label) } }
 
     private fun start(i: Intent) {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ctx.startActivity(i)
     }
 
+    private fun mediaKey(code: Int) {
+        val am = ctx.getSystemService(AudioManager::class.java)
+        val t = SystemClock.uptimeMillis()
+        am.dispatchMediaKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, code, 0))
+        am.dispatchMediaKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, code, 0))
+    }
+
+    private fun lookupNumber(name: String): String? {
+        if (ctx.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            main.post { askPermission?.invoke(Manifest.permission.READ_CONTACTS) }
+            return null
+        }
+        val q = norm(name)
+        if (q.isEmpty()) return null
+        var best: String? = null
+        ctx.contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME, ContactsContract.CommonDataKinds.Phone.NUMBER),
+            null, null, null,
+        )?.use { c ->
+            while (c.moveToNext()) {
+                val nn = norm(c.getString(0) ?: continue)
+                if (nn == q) return c.getString(1)
+                if (best == null && (nn.contains(q) || (q.length >= 3 && q.contains(nn) && nn.length >= 3))) best = c.getString(1)
+            }
+        }
+        return best
+    }
+
+    private fun missingContact(who: String): String =
+        if (ctx.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
+            "J'ai besoin d'accéder aux contacts : accepte la demande qui vient de s'afficher, puis redemande-moi."
+        else "Je ne trouve pas « $who » dans les contacts."
+
     private fun loadNotes(): JSONObject = try {
         if (notesFile.exists()) JSONObject(notesFile.readText()) else JSONObject()
     } catch (_: Exception) { JSONObject() }
 
-    private fun norm(s: String) = java.text.Normalizer.normalize(s.lowercase(Locale.FRANCE), java.text.Normalizer.Form.NFD)
-        .replace(Regex("\\p{M}"), "").replace(Regex("[^a-z0-9]"), "")
+    private fun norm(s: String) = Text.fold(s).replace(Regex("[^a-z0-9]"), "")
+
+    private fun hm(prefix: String, h: Int, m: Int) = String.format(Locale.FRANCE, "%s%02dh%02d", prefix, h, m)
 
     private fun human(s: Int): String {
         val h = s / 3600; val m = s % 3600 / 60; val sec = s % 60
@@ -240,17 +370,13 @@ class Skills(private val ctx: Context) {
     }
 
     companion object {
-        /** Schéma JSON compact : chaque paramètre est une chaîne/nombre décrit en une phrase. */
-        fun schema(vararg props: Pair<String, String>, required: List<String>? = null): JSONObject {
+        fun str(d: String): JSONObject = JSONObject().put("type", "string").put("description", d)
+        fun int(d: String): JSONObject = JSONObject().put("type", "integer").put("description", d)
+        fun enum(vararg v: String): JSONObject = JSONObject().put("type", "string").put("enum", JSONArray(v.toList()))
+
+        fun obj(vararg props: Pair<String, JSONObject>, required: List<String>? = null): JSONObject {
             val p = JSONObject()
-            props.forEach { (k, d) ->
-                val type = when {
-                    d.startsWith("true") -> "boolean"
-                    k in setOf("secondes", "heure", "minute", "pourcent", "duree_minutes") && !d.contains("HH") -> "integer"
-                    else -> "string"
-                }
-                p.put(k, JSONObject().put("type", type).put("description", d))
-            }
+            props.forEach { (k, v) -> p.put(k, v) }
             return JSONObject().put("type", "object").put("properties", p)
                 .put("required", JSONArray(required ?: props.map { it.first }))
         }
@@ -272,10 +398,10 @@ class LongMemory(ctx: Context) {
     }
 
     @Synchronized fun forget(keyword: String): Int {
-        val k = keyword.trim().lowercase(Locale.FRANCE)
+        val k = Text.fold(keyword.trim())
         if (k.isEmpty()) return 0
         val l = all()
-        val kept = l.filterNot { it.lowercase(Locale.FRANCE).contains(k) }
+        val kept = l.filterNot { Text.fold(it).contains(k) }
         save(kept)
         return l.size - kept.size
     }
@@ -286,11 +412,10 @@ class LongMemory(ctx: Context) {
 
     private fun save(l: List<String>) { file.writeText(JSONArray(l).toString()) }
 
-    /** Bloc à ajouter à la consigne système (borné pour ne pas manger le contexte). */
     fun promptBlock(): String {
         val facts = all()
         if (facts.isEmpty()) return ""
-        val sb = StringBuilder("\n\nCe que tu sais déjà de ton interlocuteur :")
+        val sb = StringBuilder("\n\nCe que tu sais de ton interlocuteur :")
         for (f in facts.asReversed()) {
             if (sb.length + f.length > 1400) break
             sb.append("\n- ").append(f)
