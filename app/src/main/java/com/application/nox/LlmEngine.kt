@@ -91,10 +91,13 @@ class LlmEngine(
             NoxLog.i("MOTEUR", "Avant chargement : ${NoxLog.memSnapshot()}")
 
             val probeClock = NoxLog.chrono()
-            val info = probe(path)
-            NoxLog.i("MOTEUR", "Capacités du fichier (${probeClock.ms()} ms) : MTP=${info.mtp}, outils=${info.tools}")
+            val info = cachedProbe(file)
+            NoxLog.i("MOTEUR", "Capacités du fichier (${probeClock.ms()} ms) : MTP=${info.mtp}, outils déclarés=${info.tools}")
             val mtpCapable = prefs.turbo && info.mtp
-            toolsCapable = info.tools
+            // Les fichiers Gemma 4 E de litert-community ne déclarent pas le function calling dans leurs
+            // métadonnées, alors que le modèle le gère : on l'active quand même (repli automatique si refus).
+            toolsCapable = info.tools || isGemmaE(file.name)
+            if (!info.tools && toolsCapable) NoxLog.i("MOTEUR", "Outils forcés : Gemma série E sait appeler des fonctions")
             val multimodal = isGemmaE(file.name)
             val wantAudio = prefs.listenMode == "native" && multimodal
             val wantVision = prefs.vision && multimodal
@@ -156,6 +159,16 @@ class LlmEngine(
     }
 
     private data class Probe(val mtp: Boolean, val tools: Boolean)
+
+    /** L'analyse du fichier coûte ~2 s : on la garde en cache (clé = nom + taille). */
+    private fun cachedProbe(f: File): Probe {
+        val sp = ctx.getSharedPreferences("nox_probe", Context.MODE_PRIVATE)
+        val key = "${f.name}:${f.length()}"
+        sp.getString(key, null)?.split(',')?.let { v -> if (v.size == 2) return Probe(v[0] == "1", v[1] == "1") }
+        val p = probe(f.absolutePath)
+        sp.edit().putString(key, "${if (p.mtp) 1 else 0},${if (p.tools) 1 else 0}").apply()
+        return p
+    }
 
     private fun probe(path: String): Probe = try {
         ModelInfo.from(path).use { info ->
