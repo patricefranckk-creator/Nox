@@ -80,6 +80,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("remember_chats", true)
         set(v) = sp.edit().putBoolean("remember_chats", v).apply()
 
+    /** Journal en mode détaillé. */
+    var verboseLog: Boolean
+        get() = sp.getBoolean("verbose_log", false)
+        set(v) = sp.edit().putBoolean("verbose_log", v).apply()
+
     var voiceName: String
         get() = sp.getString("voice", "") ?: ""
         set(v) = sp.edit().putString("voice", v).apply()

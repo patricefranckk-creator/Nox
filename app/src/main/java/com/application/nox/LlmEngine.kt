@@ -3,7 +3,6 @@ package com.application.nox
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
@@ -86,8 +85,14 @@ class LlmEngine(
             val file = File(path)
             val spec = store.specForFile(file.name)
             modelLabel = spec?.title?.substringBefore("  ") ?: file.nameWithoutExtension
+            val loadClock = NoxLog.chrono()
+            NoxLog.i("MOTEUR", "Chargement de ${file.name} (${NoxLog.gb(file.length())}) · demandé : ${prefs.backend.uppercase()}, turbo=${prefs.turbo}, " +
+                "contexte=${prefs.contextTokens}, écoute=${prefs.listenMode}, vue=${prefs.vision}, compétences=${prefs.skillsEnabled}")
+            NoxLog.i("MOTEUR", "Avant chargement : ${NoxLog.memSnapshot()}")
 
+            val probeClock = NoxLog.chrono()
             val info = probe(path)
+            NoxLog.i("MOTEUR", "Capacités du fichier (${probeClock.ms()} ms) : MTP=${info.mtp}, outils=${info.tools}")
             val mtpCapable = prefs.turbo && info.mtp
             toolsCapable = info.tools
             val multimodal = isGemmaE(file.name)
@@ -109,8 +114,9 @@ class LlmEngine(
             }
             if (ctxWanted > 4096) attempts += Attempt("CPU", false, 4096, false, false)
 
+            NoxLog.d("MOTEUR", "Cascade prévue : " + attempts.joinToString(" → ") { "${it.kind}${if (it.mtp) "+MTP" else ""}${if (it.audio) "+A" else ""}${if (it.vision) "+V" else ""}/${it.ctx}" })
             var lastErr: Throwable? = null
-            for (a in attempts) {
+            for ((idx, a) in attempts.withIndex()) {
                 post { onStatus("Démarrage ${a.kind}${if (a.mtp) " + turbo" else ""}${if (a.audio) " + oreille" else ""}${if (a.vision) " + vue" else ""}…") }
                 val t0 = System.currentTimeMillis()
                 try {
@@ -119,25 +125,30 @@ class LlmEngine(
                     audioReady = a.audio
                     visionReady = a.vision
                     backendLabel = a.kind + (if (a.mtp) "·MTP" else "")
-                    Log.i(TAG, "Moteur prêt en ${System.currentTimeMillis() - t0} ms ($a)")
+                    NoxLog.p("MOTEUR", "Moteur prêt en ${System.currentTimeMillis() - t0} ms · essai ${idx + 1}/${attempts.size} · " +
+                        "${a.kind}${if (a.mtp) "+MTP" else ""} · oreille=${a.audio} · vue=${a.vision} · contexte=${a.ctx}")
                     break
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Échec $a", t)
+                    NoxLog.w("MOTEUR", "Essai ${idx + 1} échoué en ${System.currentTimeMillis() - t0} ms (${a.kind}${if (a.mtp) "+MTP" else ""}, oreille=${a.audio}, vue=${a.vision})", t)
                     lastErr = t
                 }
             }
             if (engine == null) {
+                NoxLog.e("MOTEUR", "Aucune configuration n'a démarré", lastErr)
                 post { onResult(false, "Impossible de charger le modèle : ${lastErr?.message ?: "erreur inconnue"}") }
                 return@execute
             }
             try {
                 post { onStatus("Préparation de la mémoire…") }
+                val prefill = NoxLog.chrono()
                 conversation = newConversation(history)
+                NoxLog.p("MOTEUR", "Conversation prête en ${prefill.ms()} ms (consigne + ${if (skillsActive) "outils + " else ""}historique pré-calculés, ≈${(charsInContext / CHARS_PER_TOKEN).toInt()} jetons)")
+                NoxLog.p("MOTEUR", "Chargement total ${loadClock.ms()} ms · ${NoxLog.memSnapshot()}")
                 ready = true
                 val extras = listOfNotNull(if (audioReady) "oreille" else null, if (visionReady) "vue" else null, if (skillsActive) "compétences" else null)
                 post { onResult(true, "$modelLabel · $backendLabel" + if (extras.isEmpty()) "" else " · " + extras.joinToString(" + ")) }
             } catch (t: Throwable) {
-                Log.e(TAG, "createConversation", t)
+                NoxLog.e("MOTEUR", "Création de la conversation impossible", t)
                 closeInternal()
                 post { onResult(false, "Erreur conversation : ${t.message}") }
             }
@@ -241,7 +252,7 @@ class LlmEngine(
             try {
                 return build(true).also { skillsActive = true }
             } catch (t: Throwable) {
-                Log.w(TAG, "Compétences refusées par ce modèle, on continue sans", t)
+                NoxLog.w("MOTEUR", "Compétences refusées par ce modèle, on continue sans", t)
             }
         }
         skillsActive = false
@@ -253,7 +264,7 @@ class LlmEngine(
             try { conversation?.close() } catch (_: Throwable) {}
             conversation = null
             if (engine != null) {
-                try { conversation = newConversation(history) } catch (t: Throwable) { Log.e(TAG, "reset", t) }
+                try { conversation = newConversation(history) } catch (t: Throwable) { NoxLog.e("MOTEUR", "Réinitialisation de la conversation", t) }
             }
             post { done?.invoke() }
         }
@@ -269,9 +280,13 @@ class LlmEngine(
         if (busy) return
         busy = true
         worker.execute {
+            val ragClock = NoxLog.chrono()
             val hits = try {
                 if (prefs.ragAuto) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()
-            } catch (t: Throwable) { emptyList() }
+            } catch (t: Throwable) { NoxLog.e("RAG", "Recherche automatique", t); emptyList() }
+            lastRagMs = ragClock.ms(); lastRagHits = hits.size
+            if (hits.isNotEmpty()) NoxLog.i("RAG", "Injection auto ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
+            else NoxLog.d("RAG", "Rien d'assez pertinent ($lastRagMs ms)")
             val ctxBlock = library.contextBlock(hits)
             if (hits.isNotEmpty()) post { l.onContext(hits.size) }
             val full = if (ctxBlock.isEmpty()) text else ctxBlock + "\nMessage de l'utilisateur : " + text
@@ -279,7 +294,8 @@ class LlmEngine(
                 Message.user(Contents.of(Content.ImageBytes(image), Content.Text(full.ifBlank { "Décris cette image." })))
             else Message.user(full)
             val extra = if (image != null) (280 * CHARS_PER_TOKEN).toInt() else 0
-            submitNow(msg, full.length + extra, null, history, l)
+            if (image != null) NoxLog.i("VUE", "Photo envoyée à Gemma : ${image.size / 1024} Ko")
+            submitNow(msg, full.length + extra, null, history, l, if (image != null) "photo" else "texte")
         }
     }
 
@@ -290,17 +306,20 @@ class LlmEngine(
         val approxChars = ((durationMs / 1000.0) * 25 * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
         if (busy) return
         busy = true
-        worker.execute { submitNow(msg, approxChars, TranscriptExtractor(), history, l) }
+        lastRagMs = 0; lastRagHits = 0
+        NoxLog.i("OREILLE", "Message vocal envoyé à Gemma : ${durationMs} ms d'audio, ${wav.size / 1024} Ko")
+        worker.execute { submitNow(msg, approxChars, TranscriptExtractor(), history, l, "voix") }
     }
 
     /** Toujours appelé sur le fil du modèle. */
-    private fun submitNow(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener) {
+    private fun submitNow(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener, mode: String) {
         run {
             val projected = charsInContext + approxChars + 1200
             if (projected > ctxTokens * CHARS_PER_TOKEN * 0.80) {
-                Log.i(TAG, "Compactage du contexte")
+                val c = NoxLog.chrono()
                 try { conversation?.close() } catch (_: Throwable) {}
-                conversation = try { newConversation(history) } catch (t: Throwable) { null }
+                conversation = try { newConversation(history) } catch (t: Throwable) { NoxLog.e("MOTEUR", "Compactage raté", t); null }
+                NoxLog.p("MOTEUR", "Compactage du contexte (plein à ${(projected * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt()} %) refait en ${c.ms()} ms")
             }
             val conv = conversation
             if (conv == null) {
@@ -309,6 +328,8 @@ class LlmEngine(
                 return@run
             }
             charsInContext += approxChars
+            skills.callsThisTurn.set(0)
+            NoxLog.d("GEN", "Envoi ($mode, ≈${(approxChars / CHARS_PER_TOKEN).toInt()} jetons) · ${NoxLog.memSnapshot()}")
             val t0 = System.nanoTime()
             var tFirst = 0L
             var chars = 0
@@ -332,6 +353,7 @@ class LlmEngine(
                         charsInContext += chars
                         busy = false
                         val stats = stats(t0, tFirst, chars)
+                        record(mode, t0, tFirst, chars)
                         post { l.onDone(stats) }
                     }
 
@@ -339,19 +361,33 @@ class LlmEngine(
                         charsInContext += chars
                         busy = false
                         if (throwable is CancellationException) {
+                            NoxLog.i("GEN", "Génération interrompue après $chars caractères")
                             post { l.onDone("interrompu") }
                         } else {
-                            Log.e(TAG, "génération", throwable)
+                            NoxLog.e("GEN", "Erreur pendant la génération ($mode)", throwable)
                             post { l.onError(throwable.message ?: "erreur de génération") }
                         }
                     }
                 })
             } catch (t: Throwable) {
                 busy = false
-                Log.e(TAG, "sendMessageAsync", t)
+                NoxLog.e("GEN", "Envoi impossible", t)
                 post { l.onError(t.message ?: "erreur") }
             }
         }
+    }
+
+    @Volatile private var lastRagMs = 0L
+    @Volatile private var lastRagHits = 0
+
+    private fun record(mode: String, t0: Long, tFirst: Long, chars: Int) {
+        if (tFirst == 0L) { NoxLog.w("GEN", "Réponse vide ($mode)"); return }
+        val now = System.nanoTime()
+        val dec = (now - tFirst) / 1_000_000
+        val tokens = (chars / CHARS_PER_TOKEN).toInt()
+        NoxLog.turn(NoxLog.Turn(System.currentTimeMillis(), mode, (tFirst - t0) / 1_000_000, dec, tokens,
+            if (dec > 50) tokens * 1000.0 / dec else 0.0, lastRagMs, lastRagHits, skills.callsThisTurn.get(),
+            (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt(), backendLabel))
     }
 
     private fun stats(t0: Long, tFirst: Long, chars: Int): String {
@@ -389,7 +425,6 @@ class LlmEngine(
     private fun post(r: () -> Unit) = main.post(r)
 
     companion object {
-        private const val TAG = "NoxLLM"
         const val CHARS_PER_TOKEN = 3.6
         /** Estimation de la place prise par la description des outils dans le contexte. */
         private const val SKILLS_PROMPT_CHARS = 4200

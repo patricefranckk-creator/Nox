@@ -44,7 +44,12 @@ Le modèle ne change pas : Gemma 4 E2B (vitesse) ou E4B (qualité). Tout le rest
 - **Toucher l'orbe** : parler · pendant qu'il parle ou réfléchit : l'interrompre et reprendre la parole.
 - **Appui long sur l'orbe** : mode mains libres (Nox réécoute après chaque réponse, l'écran reste allumé).
 - **Appui long sur une bulle** : copier ou relire à voix haute.
-- **✦** nouvelle conversation · **⚡** compétences & mémoire · **◉** modèles · **⚙** réglages.
+- **⋮ (en haut à droite)** : tout le menu — nouvelle conversation, compétences/mémoire/bibliothèque, modèles, réglages, journal de bord, aide, à propos.
+
+## Versions et journal
+
+- **Numéro de version automatique** : `2.1.N`, où N est le numéro du build GitHub. Visible dans ⋮ › À propos (avec date de build et commit).
+- **Journal de bord** (⋮ › 📈) : chargement du moteur essai par essai, temps avant le 1er mot, jetons/s, durée du RAG, chaque appel d'outil (paramètres, résultat, durée), mémoire libre et température à chaque étape, erreurs avec pile d'appel, plantages Java et raison de la dernière fermeture donnée par Android (y compris plantage natif GPU). Filtres Perfs / Erreurs / Moteur / Outils, résumé chiffré, mode détaillé, bouton Partager.
 
 ## Réglages utiles
 

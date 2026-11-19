@@ -74,6 +74,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        NoxLog.init(this, "v${AppInfo.version(this)} (build ${AppInfo.build(this)})")
+        NoxLog.verbose = prefs.verboseLog
         store = ModelStore(this)
         chats = ChatStore(this)
         library = Library(this, store)
@@ -159,13 +161,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         statusChip = text("hors-ligne · 100 % local", 12f, Ui.MUTED)
         titleBox.addView(statusChip)
         top.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
-        top.addView(iconButton("✦") { newConversation() }.also { it.contentDescription = "Nouvelle conversation" })
-        top.addView(spacer(6))
-        top.addView(iconButton("⚡") { SkillsDialog(this).show() }.also { it.contentDescription = "Compétences et mémoire" })
-        top.addView(spacer(6))
-        top.addView(iconButton("◉") { ModelsDialog(this).show() }.also { it.contentDescription = "Modèles" })
-        top.addView(spacer(6))
-        top.addView(iconButton("⚙") { SettingsDialog(this).show() }.also { it.contentDescription = "Réglages" })
+        top.addView(iconButton("⋮") { v -> openMenu(v) }.also { it.contentDescription = "Menu" })
         col.addView(top)
 
         // Orbe
@@ -251,6 +247,23 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         return root
     }
 
+    /** Menu principal : tout est ici. */
+    private fun openMenu(anchor: View) {
+        val pm = android.widget.PopupMenu(this, anchor, Gravity.END)
+        val items = listOf(
+            "✦  Nouvelle conversation" to { newConversation() },
+            "⚡  Compétences, mémoire & bibliothèque" to { SkillsDialog(this).show() },
+            "◉  Modèles" to { ModelsDialog(this).show() },
+            "⚙  Réglages" to { SettingsDialog(this).show() },
+            "📈  Journal de bord" to { JournalDialog(this).show() },
+            "？ Aide" to { HelpDialog.show(this) },
+            "ⓘ  À propos · v${AppInfo.version(this)}" to { AboutDialog.show(this) },
+        )
+        items.forEachIndexed { i, (label, _) -> pm.menu.add(0, i, i, label) }
+        pm.setOnMenuItemClickListener { mi -> items[mi.itemId].second.invoke(); true }
+        pm.show()
+    }
+
     private fun spacer(w: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(w), 1) }
 
     private fun addBubble(m: ChatMsg, save: Boolean = true, register: Boolean = true): TextView {
@@ -329,6 +342,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         // Garde-fou : si le chargement précédent a fait planter l'appli (pilote GPU), on passe en CPU.
         if (prefs.loadInProgress && prefs.backend == "gpu") {
             prefs.backend = "cpu"
+            NoxLog.e("MOTEUR", "Le démarrage GPU précédent n'est jamais arrivé au bout (plantage natif probable) : passage automatique en CPU")
             toast("Le dernier démarrage GPU a échoué : passage automatique en CPU (modifiable dans Réglages)")
         }
         prefs.loadInProgress = true
@@ -339,6 +353,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         engine.load(messages.toList(), onStatus = { s -> orbHint.text = s }) { ok, msg ->
             loading = false
             prefs.loadInProgress = false
+            if (ok) NoxLog.i("APP", "Nox prêt : $msg") else NoxLog.e("APP", "Chargement raté : $msg")
             if (ok) {
                 statusChip.text = "$msg · hors-ligne"
                 setOrb(OrbView.Mode.IDLE, idleHint())

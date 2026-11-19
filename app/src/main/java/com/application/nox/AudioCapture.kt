@@ -120,6 +120,7 @@ class AudioCapture(private val listener: Listener) {
                 }
             }
         } catch (t: Throwable) {
+            NoxLog.e("OREILLE", "Enregistrement interrompu", t)
             main.post { listener.onCaptureError("Enregistrement interrompu : ${t.message}") }
         } finally {
             try { rec.stop() } catch (_: Throwable) {}
@@ -128,9 +129,12 @@ class AudioCapture(private val listener: Listener) {
 
         val cancelled = !running
         running = false
-        if (cancelled) return
+        if (cancelled) { NoxLog.d("OREILLE", "Écoute annulée"); return }
         val data = pcm.toByteArray()
         val ms = data.size / 2 * 1000L / RATE
+        val why = when { forceStop -> "touche de fin"; !speaking -> "aucune voix détectée"; totalFrames > maxFrames -> "limite 30 s"; else -> "silence détecté" }
+        NoxLog.i("OREILLE", "Capture : ${ms} ms de parole sur ${totalFrames * FRAME_MS} ms · bruit de fond ${noise.toInt()} · fin : $why · " +
+            "NS=${ns != null} AGC=${agc != null}")
         main.post {
             if (!speaking || ms < 400) listener.onCaptureNothing()
             else listener.onCaptured(wav(data), ms)

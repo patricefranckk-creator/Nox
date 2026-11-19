@@ -4,7 +4,6 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
-import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.EmbeddingEngine
 import com.google.ai.edge.litertlm.EmbeddingEngineConfig
@@ -63,6 +62,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         worker.execute {
             if (embedder != null) return@execute
             val f = store.embedFile() ?: return@execute
+            val c = NoxLog.chrono()
             try {
                 val e = EmbeddingEngine(
                     EmbeddingEngineConfig(
@@ -75,10 +75,10 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                 e.initialize()
                 embedder = e
                 semantic = true
-                Log.i(TAG, "EmbeddingGemma prêt")
+                NoxLog.p("RAG", "EmbeddingGemma 2 prêt en ${c.ms()} ms · ${NoxLog.memSnapshot()}")
                 embedPending()
             } catch (t: Throwable) {
-                Log.e(TAG, "EmbeddingGemma indisponible", t)
+                NoxLog.e("RAG", "EmbeddingGemma indisponible, recherche par mots-clés seulement", t)
                 semantic = false
             }
         }
@@ -100,7 +100,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                 normalize(v)
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "embedding", t); null
+            NoxLog.w("RAG", "Vectorisation impossible", t); null
         }
     }
 
@@ -108,11 +108,16 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     private fun embedPending() {
         if (embedder == null) return
         val todo = synchronized(lock) { chunks.filter { it.vec == null } }
+        if (todo.isEmpty()) return
+        val clock = NoxLog.chrono()
+        var ok = 0
         for (c in todo) {
             val v = embed(c.title + "\n" + c.text, query = false) ?: continue
             c.vec = v
             db.setVec(c.id, v)
+            ok++
         }
+        NoxLog.p("RAG", "Vectorisation de $ok/${todo.size} extrait(s) en ${clock.ms()} ms (${if (ok > 0) clock.ms() / ok else 0} ms/extrait)")
     }
 
     // ================================================================ ajout / suppression
@@ -122,7 +127,9 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         worker.execute {
             val source = "doc:" + title
             removeSourceNow(source)
+            val c = NoxLog.chrono()
             val n = insert(source, title, Text.chunk(text))
+            NoxLog.i("RAG", "Document « $title » : ${text.length} caractères → $n extrait(s) en ${c.ms()} ms")
             embedPending()
             onDone?.let { cb -> android.os.Handler(android.os.Looper.getMainLooper()).post { cb(n) } }
         }
@@ -246,6 +253,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         bm.entries.sortedByDescending { it.value }.take(30).forEachIndexed { r, e -> rrf[e.key] = (rrf[e.key] ?: 0.0) + 1.0 / (60 + r) }
         cos.entries.sortedByDescending { it.value }.take(30).forEachIndexed { r, e -> rrf[e.key] = (rrf[e.key] ?: 0.0) + 1.0 / (60 + r) }
 
+        NoxLog.d("RAG", "Recherche « ${q.take(50)} » : ${pool.size} extraits, BM25 ${bm.size} touchés, sens ${if (qv != null) cos.size else "off"}")
         val byId = pool.associateBy { it.id }
         return rrf.entries.sortedByDescending { it.value }.mapNotNull { e ->
             val c = byId[e.key] ?: return@mapNotNull null
@@ -304,7 +312,6 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     }
 
     companion object {
-        private const val TAG = "NoxRAG"
         /** Seuils d'injection automatique (prudents : mieux vaut rien qu'un hors-sujet). */
         const val COS_STRONG = 0.55
         const val COS_WEAK = 0.35

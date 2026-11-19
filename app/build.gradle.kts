@@ -12,8 +12,15 @@ android {
         applicationId = "com.application.nox"
         minSdk = 31          // reconnaissance vocale 100 % sur l'appareil (API 31+)
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Numéro de version automatique : chaque build GitHub Actions incrémente le dernier chiffre.
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "2.1.$build"
+        val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)
+        val date = java.time.LocalDateTime.now(java.time.ZoneId.of("Europe/Paris"))
+            .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
+        resValue("string", "nox_commit", sha)
+        resValue("string", "nox_build_date", date)
         ndk { abiFilters += listOf("arm64-v8a") }   // ton Snapdragon = ARM64 uniquement
     }
 
@@ -22,6 +29,10 @@ android {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    buildFeatures {
+        resValues = true
     }
 
     compileOptions {

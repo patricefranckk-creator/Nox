@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.util.Log
 
 /**
  * Oreille de Nox : reconnaissance vocale SUR L'APPAREIL (API 31+), sans envoi au cloud.
@@ -29,6 +28,7 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     private var onDevice = false
     private var triedFallback = false
     var active = false; private set
+    private var startedAt = 0L
 
     val isOnDevice get() = onDevice
 
@@ -60,6 +60,7 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
             return
         }
         active = true
+        startedAt = System.currentTimeMillis()
         try {
             recognizer?.startListening(intent())
         } catch (t: Throwable) {
@@ -95,13 +96,16 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
 
         override fun onResults(results: Bundle?) {
             active = false
+            NoxLog.i("VOIX", "Reconnaissance Android OK en ${System.currentTimeMillis() - startedAt} ms (sur l'appareil=$onDevice)")
             val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
             if (t.isNullOrBlank()) listener.onNothing() else listener.onFinal(t.trim())
         }
 
         override fun onError(error: Int) {
             active = false
-            Log.w("NoxVoiceIn", "erreur $error (onDevice=$onDevice)")
+            if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && error != SpeechRecognizer.ERROR_CLIENT)
+                NoxLog.w("VOIX", "Reconnaissance Android : erreur $error (sur l'appareil=$onDevice)")
+            else NoxLog.d("VOIX", "Reconnaissance : rien compris (code $error)")
             when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> listener.onNothing()

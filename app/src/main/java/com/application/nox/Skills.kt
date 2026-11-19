@@ -46,6 +46,8 @@ class Skills(private val ctx: Context, private val library: Library) {
     var askPermission: ((String) -> Unit)? = null
     /** Les échanges plus récents que ça sont déjà dans le contexte : inutile de les rechercher. */
     @Volatile var conversationStart = System.currentTimeMillis()
+    /** Nombre d'outils appelés pendant le tour en cours (journal). */
+    val callsThisTurn = java.util.concurrent.atomic.AtomicInteger(0)
 
     private val main = Handler(Looper.getMainLooper())
     val memory = LongMemory(ctx)
@@ -305,10 +307,17 @@ class Skills(private val ctx: Context, private val library: Library) {
             override fun getToolDescriptionJsonString(): String =
                 JSONObject().put("name", s.name).put("description", s.description).put("parameters", s.params).toString()
 
-            override fun execute(paramsJsonString: String): String = try {
-                s.run(JSONObject(paramsJsonString.ifBlank { "{}" }))
-            } catch (t: Throwable) {
-                "Échec : ${t.message ?: t.javaClass.simpleName}"
+            override fun execute(paramsJsonString: String): String {
+                callsThisTurn.incrementAndGet()
+                val c = NoxLog.chrono()
+                return try {
+                    val r = s.run(JSONObject(paramsJsonString.ifBlank { "{}" }))
+                    NoxLog.i("OUTIL", "${s.name}($paramsJsonString) → ${r.replace('\n', ' ').take(160)} · ${c.ms()} ms")
+                    r
+                } catch (t: Throwable) {
+                    NoxLog.e("OUTIL", "${s.name}($paramsJsonString) a échoué en ${c.ms()} ms", t)
+                    "Échec : ${t.message ?: t.javaClass.simpleName}"
+                }
             }
         })
     }

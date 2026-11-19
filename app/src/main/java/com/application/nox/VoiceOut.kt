@@ -34,7 +34,7 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
     var speaking = false; private set
 
     override fun onInit(status: Int) {
-        if (status != TextToSpeech.SUCCESS) return
+        if (status != TextToSpeech.SUCCESS) { NoxLog.e("VOIX", "Synthèse vocale indisponible (statut $status)"); return }
         ok = true
         tts.setAudioAttributes(
             AudioAttributes.Builder()
@@ -59,6 +59,7 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
             }
 
             override fun onError(id: String?, code: Int) {
+                NoxLog.w("VOIX", "Erreur de lecture TTS (code $code)")
                 main.post { utteranceFinished() }
             }
         })
@@ -77,6 +78,7 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         val voices = frenchVoices()
         val chosen = voices.firstOrNull { it.name == prefs.voiceName } ?: voices.firstOrNull()
         if (chosen != null) tts.voice = chosen
+        NoxLog.i("VOIX", "Voix : ${chosen?.name ?: "défaut"} (qualité ${chosen?.quality ?: "?"}) · ${voices.size} voix FR hors-ligne · débit ${prefs.speechRate} · hauteur ${prefs.pitch}")
         tts.setSpeechRate(prefs.speechRate)
         tts.setPitch(prefs.pitch)
     }
