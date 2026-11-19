@@ -27,12 +27,19 @@ Nox est un assistant qui vit entièrement dans le téléphone : le modèle de la
 3. À la fin du téléchargement, Nox se branche tout seul.
 4. Si la reconnaissance vocale signale un pack manquant : Réglages Android › Google › Voix › Reconnaissance vocale hors connexion › Français.
 
+## Le harnais
+
+- **Oreille Gemma (écoute native)** : avec Gemma 4 E2B/E4B, ta voix part directement dans le modèle (16 kHz, détection automatique de fin de phrase, suppression du bruit, 30 s max). Il entend le ton, les hésitations, et écrit ce qu'il a compris dans ta bulle. Touche l'orbe quand tu as fini pour envoyer tout de suite. Autres modèles : reconnaissance vocale du téléphone, automatiquement.
+- **Compétences (⚡)** : outils réels que le modèle appelle tout seul — heure/date, calculatrice exacte, minuteur, réveil, notes et listes (courses…), mémoire longue (« retiens que… » / « oublie… »), lampe torche, volume, ouvrir une appli, préparer un événement d'agenda, état du téléphone. Une puce s'affiche à chaque action.
+- **Mémoire longue** : les faits retenus sont réinjectés dans chaque conversation ; consultables et effaçables dans ⚡.
+- **Optimisations** : consigne + outils + historique pré-calculés au chargement (premier mot plus rapide), réflexion désactivée, compactage du contexte, cascade GPU → CPU avec repli sans oreille si besoin.
+
 ## Gestes
 
 - **Toucher l'orbe** : parler · pendant qu'il parle ou réfléchit : l'interrompre et reprendre la parole.
 - **Appui long sur l'orbe** : mode mains libres (Nox réécoute après chaque réponse, l'écran reste allumé).
 - **Appui long sur une bulle** : copier ou relire à voix haute.
-- **✦** nouvelle conversation · **◉** modèles · **⚙** réglages.
+- **✦** nouvelle conversation · **⚡** compétences & mémoire · **◉** modèles · **⚙** réglages.
 
 ## Réglages utiles
 

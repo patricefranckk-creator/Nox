@@ -30,14 +30,19 @@ import com.application.nox.Ui.dp
 import com.application.nox.Ui.iconButton
 import com.application.nox.Ui.text
 
-class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
+class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCapture.Listener {
 
     lateinit var prefs: Prefs
     lateinit var store: ModelStore
     private lateinit var chats: ChatStore
     lateinit var engine: LlmEngine
     lateinit var voiceOut: VoiceOut
+    lateinit var skills: Skills
     private var voiceIn: VoiceIn? = null
+    private var capture: AudioCapture? = null
+
+    /** Une écoute est en cours (reconnaissance Android OU oreille native Gemma). */
+    private val listeningNow get() = voiceIn?.active == true || capture?.active == true
 
     val messages = mutableListOf<ChatMsg>()
     private val main = Handler(Looper.getMainLooper())
@@ -66,7 +71,9 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         prefs = Prefs(this)
         store = ModelStore(this)
         chats = ChatStore(this)
-        engine = LlmEngine(this, prefs, store)
+        skills = Skills(this)
+        skills.onUsed = { label -> addChip(label) }
+        engine = LlmEngine(this, prefs, store, skills)
         voiceOut = VoiceOut(this, prefs, this)
 
         window.setDecorFitsSystemWindows(false)   // bord à bord partout, on gère les marges nous-mêmes
@@ -102,10 +109,15 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         main.postDelayed(autoPlug, 3000)
     }
 
+    private fun stopListening() {
+        voiceIn?.stop()
+        capture?.cancel()
+    }
+
     override fun onPause() {
         main.removeCallbacks(autoPlug)
         super.onPause()
-        voiceIn?.stop()
+        stopListening()
         chats.save(messages)
     }
 
@@ -113,6 +125,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         if (loading) prefs.loadInProgress = false   // fermeture normale, pas un plantage
         main.removeCallbacksAndMessages(null)
         voiceIn?.release()
+        capture?.cancel()
         voiceOut.release()
         engine.release()
         super.onDestroy()
@@ -137,9 +150,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         titleBox.addView(statusChip)
         top.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
         top.addView(iconButton("✦") { newConversation() }.also { it.contentDescription = "Nouvelle conversation" })
-        top.addView(spacer(8))
+        top.addView(spacer(6))
+        top.addView(iconButton("⚡") { SkillsDialog(this).show() }.also { it.contentDescription = "Compétences et mémoire" })
+        top.addView(spacer(6))
         top.addView(iconButton("◉") { ModelsDialog(this).show() }.also { it.contentDescription = "Modèles" })
-        top.addView(spacer(8))
+        top.addView(spacer(6))
         top.addView(iconButton("⚙") { SettingsDialog(this).show() }.also { it.contentDescription = "Réglages" })
         col.addView(top)
 
@@ -295,7 +310,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
             toast("Le dernier démarrage GPU a échoué : passage automatique en CPU (modifiable dans Réglages)")
         }
         prefs.loadInProgress = true
-        voiceOut.stop(); voiceIn?.stop()
+        voiceOut.stop(); stopListening()
         setOrb(OrbView.Mode.OFF, "Réveil de Nox…")
         statusChip.text = "chargement du modèle…"
         refreshAction()
@@ -334,6 +349,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         when {
             !engine.ready -> if (!loading) ModelsDialog(this).show()
             engine.busy || voiceOut.speaking -> { interrupt(); startListening() }
+            capture?.active == true -> capture?.finish()   // « j'ai fini » : on envoie ce qui a été dit
             voiceIn?.active == true -> { voiceIn?.stop(); setOrb(OrbView.Mode.IDLE, idleHint()); transcript.visibility = View.GONE }
             else -> startListening()
         }
@@ -346,32 +362,45 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         refreshAction()
     }
 
-    private fun send(text: String) {
+    private fun send(text: String) = runTurn(text, null, 0L)
+
+    private fun sendAudio(wav: ByteArray, ms: Long) = runTurn(null, wav, ms)
+
+    /** Un tour de parole complet : bulle utilisateur → réflexion → réponse en flux (+ voix). */
+    private fun runTurn(text: String?, wav: ByteArray?, ms: Long) {
         if (!engine.ready) { toast(if (loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
         if (engine.busy) return
-        voiceIn?.stop()
+        stopListening()
         voiceOut.stop()
 
         val prior = messages.toList()
-        addBubble(ChatMsg(true, text))
+        val userMsg = ChatMsg(true, text ?: "🎙 message vocal (${(ms + 500) / 1000} s)")
+        val userView = addBubble(userMsg)
         val reply = ChatMsg(false, "")
         val view = addBubble(reply, save = false)
         view.text = "…"
         streamingMsg = reply
         streamingView = view
         scrollToEnd()
-        setOrb(OrbView.Mode.THINKING, "Réflexion…")
+        setOrb(OrbView.Mode.THINKING, if (wav != null) "Gemma écoute ta voix…" else "Réflexion…")
         statsLine.text = ""
 
         val speak = prefs.autoSpeak
         if (speak) voiceOut.beginStream()
 
-        engine.send(text, prior, object : LlmEngine.StreamListener {
+        val listener = object : LlmEngine.StreamListener {
             override fun onChunk(text: String) {
+                if (orb.mode == OrbView.Mode.THINKING) orbHint.text = "Réflexion…"
                 reply.text += text
                 view.text = Markdown.render(reply.text)
                 if (speak) voiceOut.feed(text)
                 if (scroll.getChildAt(0).bottom - (scroll.height + scroll.scrollY) < dp(140)) scrollToEnd()
+            }
+
+            override fun onTranscript(text: String) {
+                if (text.isBlank()) return
+                userMsg.text = text
+                userView.text = Markdown.render("🎙 $text")
             }
 
             override fun onDone(stats: String) {
@@ -385,8 +414,22 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
                 view.text = Markdown.render(reply.text)
                 finishTurn(speak)
             }
-        })
+        }
+        if (wav != null) engine.sendAudio(wav, ms, prior, listener) else engine.send(text ?: "", prior, listener)
         refreshAction()
+    }
+
+    /** Puce discrète « ⏱ minuteur 5 min » quand Nox utilise une compétence. */
+    private fun addChip(label: String) {
+        val chip = text(label, 12f, Ui.CYAN).apply {
+            setPadding(dp(12), dp(5), dp(12), dp(5))
+            background = Ui.rounded(0xFF0F1E2A.toInt(), dp(14).toFloat(), 0xFF1D4A5E.toInt(), dp(1))
+        }
+        val lp = LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.START; topMargin = dp(6) }
+        val anchor = streamingView
+        val idx = if (anchor != null) list.indexOfChild(anchor) else -1
+        if (idx >= 0) list.addView(chip, idx, lp) else list.addView(chip, lp)
+        scrollToEnd()
     }
 
     private fun finishTurn(spoken: Boolean) {
@@ -394,7 +437,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         streamingView = null
         chats.save(messages)
         if (spoken) voiceOut.endStream()
-        if (!voiceOut.speaking && voiceIn?.active != true) setOrb(OrbView.Mode.IDLE, idleHint())
+        if (!voiceOut.speaking && !listeningNow) setOrb(OrbView.Mode.IDLE, idleHint())
         if (!spoken) maybeRelisten()
         refreshAction()
     }
@@ -447,13 +490,33 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC); return
         }
         voiceOut.stop()
-        if (voiceIn == null) voiceIn = VoiceIn(this, this)
         turnFromVoice = true
+        if (prefs.listenMode == "native" && engine.audioReady) {
+            // Oreille native : le son brut part directement dans Gemma
+            if (capture == null) capture = AudioCapture(this)
+            transcript.visibility = View.GONE
+            setOrb(OrbView.Mode.LISTENING, "Je t'écoute…")
+            capture?.start()
+            return
+        }
+        if (voiceIn == null) voiceIn = VoiceIn(this, this)
         transcript.text = ""
         transcript.visibility = View.VISIBLE
         setOrb(OrbView.Mode.LISTENING, "Je t'écoute…")
         voiceIn?.start()
     }
+
+    // ---- oreille native (AudioCapture)
+
+    override fun onCaptureStarted() = setOrb(OrbView.Mode.LISTENING, "Je t'écoute · oreille Gemma (touche quand tu as fini)")
+    override fun onCaptureLevel(level: Float) = orb.setLevel(level)
+    override fun onCaptured(wav: ByteArray, durationMs: Long) {
+        orb.setLevel(0f)
+        turnFromVoice = true
+        sendAudio(wav, durationMs)
+    }
+    override fun onCaptureNothing() = onNothing()
+    override fun onCaptureError(msg: String) = onVoiceError(msg)
 
     override fun onListening() {
         setOrb(OrbView.Mode.LISTENING, if (voiceIn?.isOnDevice == true) "Je t'écoute… (reconnaissance locale)" else "Je t'écoute…")
@@ -487,7 +550,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
 
     override fun onSpeakingChanged(speaking: Boolean) {
         if (speaking) setOrb(OrbView.Mode.SPEAKING, "Nox parle · touche pour l'interrompre")
-        else if (!engine.busy && voiceIn?.active != true) setOrb(OrbView.Mode.IDLE, idleHint())
+        else if (!engine.busy && !listeningNow) setOrb(OrbView.Mode.IDLE, idleHint())
         refreshAction()
     }
 

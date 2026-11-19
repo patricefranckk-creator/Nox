@@ -59,6 +59,15 @@ class SettingsDialog(private val a: MainActivity) {
 
         // ---------------- Voix
         body.addView(a.sectionTitle("Voix"))
+        body.addView(label("Comment Nox t'écoute"))
+        val listen = radios(listOf(
+            "native" to "Oreille Gemma : le son va directement dans le modèle (comprend le ton, 100 % local)",
+            "android" to "Reconnaissance du téléphone : texte en direct pendant que tu parles",
+        ), p.listenMode)
+        body.addView(listen)
+        body.addView(a.text("L'oreille Gemma ne marche qu'avec Gemma 4 / 3n (E2B, E4B). Sinon Nox bascule tout seul sur la reconnaissance du téléphone.",
+            12f, Ui.MUTED).apply { setPadding(0, a.dp(4), 0, a.dp(6)) })
+        val oldListen = p.listenMode
         val autoSpeak = switch("Lire les réponses à voix haute", p.autoSpeak)
         body.addView(autoSpeak)
         val handsFree = switch("Mains libres (réécoute automatique)", p.handsFree)
@@ -126,8 +135,9 @@ class SettingsDialog(private val a: MainActivity) {
                 p.backend = checkedTag(backend) ?: "gpu"
                 p.turbo = turbo.isChecked
                 p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
+                p.listenMode = checkedTag(listen) ?: "native"
 
-                val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx
+                val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen
                 val reconv = p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
                 when {
                     reload -> { a.applyLightSettings(); a.loadModel() }

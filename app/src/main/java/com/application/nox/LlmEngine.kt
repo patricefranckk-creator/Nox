@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
 import com.google.ai.edge.litertlm.ConversationConfig
@@ -24,16 +25,29 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 
 /**
- * Cerveau local de Nox : LiteRT-LM (Google) avec accélération GPU Adreno,
- * décodage spéculatif MTP et repli automatique sur CPU.
+ * Le harnais de Nox autour de LiteRT-LM :
+ *  - cascade de démarrage GPU+MTP → GPU → CPU (+ repli sans audio, + repli 4K) ;
+ *  - écoute native : l'audio va directement dans Gemma (sans reconnaissance vocale intermédiaire) ;
+ *  - compétences (function calling) exécutées automatiquement par le moteur ;
+ *  - mémoire longue injectée dans la consigne système, préambule pré-calculé au démarrage ;
+ *  - compactage automatique du contexte, filtre des blocs de réflexion.
  */
-class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val store: ModelStore) {
+class LlmEngine(
+    private val ctx: Context,
+    private val prefs: Prefs,
+    private val store: ModelStore,
+    private val skills: Skills,
+) {
 
     interface StreamListener {
         fun onChunk(text: String)
         fun onDone(stats: String)
         fun onError(msg: String)
+        /** Écoute native : ce que Gemma a entendu (pour remplir la bulle de l'utilisateur). */
+        fun onTranscript(text: String) {}
     }
+
+    private data class Attempt(val kind: String, val mtp: Boolean, val ctx: Int, val audio: Boolean)
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "nox-llm").apply { priority = Thread.MAX_PRIORITY } }
     private val main = Handler(Looper.getMainLooper())
@@ -45,11 +59,13 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
 
     var backendLabel = ""; private set
     var modelLabel = ""; private set
+    /** Le modèle chargé accepte l'audio (écoute native possible). */
+    var audioReady = false; private set
+    /** Les compétences sont branchées sur la conversation en cours. */
+    var skillsActive = false; private set
 
-    /** Contexte réellement utilisé (borné par ce que le fichier du modèle accepte). */
+    private var toolsCapable = false
     private var ctxTokens = 4096
-
-    /** Nombre de caractères injectés dans la conversation courante (estimation de l'occupation du contexte). */
     private var charsInContext = 0
 
     // ------------------------------------------------------------------ chargement
@@ -62,36 +78,41 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
                 post { onResult(false, "Aucun modèle installé") }
                 return@execute
             }
-            val spec = store.specForFile(File(path).name)
-            modelLabel = spec?.title?.substringBefore("  ") ?: File(path).nameWithoutExtension
+            val file = File(path)
+            val spec = store.specForFile(file.name)
+            modelLabel = spec?.title?.substringBefore("  ") ?: file.nameWithoutExtension
+
+            val info = probe(path)
+            val mtpCapable = prefs.turbo && info.mtp
+            toolsCapable = info.tools
+            val wantAudio = prefs.listenMode == "native" && hearsAudio(file.name)
             val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true
-            val mtpCapable = prefs.turbo && supportsMtp(path)
             val ctxWanted = minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE)
 
-            // Cascade : GPU+MTP → GPU → CPU (le premier qui démarre gagne)
-            val attempts = mutableListOf<Triple<String, Boolean, Int>>()
-            if (wantGpu) {
-                if (mtpCapable) attempts += Triple("GPU", true, ctxWanted)
-                attempts += Triple("GPU", false, ctxWanted)
+            val attempts = mutableListOf<Attempt>()
+            for (audio in if (wantAudio) listOf(true, false) else listOf(false)) {
+                if (wantGpu) {
+                    if (mtpCapable) attempts += Attempt("GPU", true, ctxWanted, audio)
+                    attempts += Attempt("GPU", false, ctxWanted, audio)
+                }
+                if (mtpCapable && !wantGpu) attempts += Attempt("CPU", true, ctxWanted, audio)
+                attempts += Attempt("CPU", false, ctxWanted, audio)
             }
-            if (mtpCapable && !wantGpu) attempts += Triple("CPU", true, ctxWanted)
-            attempts += Triple("CPU", false, ctxWanted)
-            // Modèle importé au contexte inconnu : dernier essai prudent en 4K
-            if (ctxWanted > 4096) attempts += Triple("CPU", false, 4096)
+            if (ctxWanted > 4096) attempts += Attempt("CPU", false, 4096, false)
 
             var lastErr: Throwable? = null
-            for ((kind, mtp, ctxN) in attempts) {
-                post { onStatus("Démarrage $kind${if (mtp) " + turbo MTP" else ""}…") }
+            for (a in attempts) {
+                post { onStatus("Démarrage ${a.kind}${if (a.mtp) " + turbo" else ""}${if (a.audio) " + oreille" else ""}…") }
                 val t0 = System.currentTimeMillis()
                 try {
-                    val e = createEngine(path, kind, mtp, ctxN)
-                    engine = e
-                    ctxTokens = ctxN
-                    backendLabel = kind + if (mtp) "·MTP" else ""
-                    Log.i(TAG, "Moteur prêt en ${System.currentTimeMillis() - t0} ms ($backendLabel)")
+                    engine = createEngine(path, a)
+                    ctxTokens = a.ctx
+                    audioReady = a.audio
+                    backendLabel = a.kind + (if (a.mtp) "·MTP" else "")
+                    Log.i(TAG, "Moteur prêt en ${System.currentTimeMillis() - t0} ms ($a)")
                     break
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Échec $kind mtp=$mtp", t)
+                    Log.w(TAG, "Échec $a", t)
                     lastErr = t
                 }
             }
@@ -100,9 +121,11 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
                 return@execute
             }
             try {
+                post { onStatus("Préparation de la mémoire…") }
                 conversation = newConversation(history)
                 ready = true
-                post { onResult(true, "$modelLabel · $backendLabel") }
+                val extras = listOfNotNull(if (audioReady) "oreille" else null, if (skillsActive) "compétences" else null)
+                post { onResult(true, "$modelLabel · $backendLabel" + if (extras.isEmpty()) "" else " · " + extras.joinToString(" + ")) }
             } catch (t: Throwable) {
                 Log.e(TAG, "createConversation", t)
                 closeInternal()
@@ -111,16 +134,35 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
         }
     }
 
+    private data class Probe(val mtp: Boolean, val tools: Boolean)
+
+    private fun probe(path: String): Probe = try {
+        ModelInfo.from(path).use { info ->
+            if (info is ModelInfo.Llm) Probe(info.hasSpeculativeDecodingSupport(), info.supportsFunctionCalling())
+            else Probe(false, false)
+        }
+    } catch (t: Throwable) {
+        Probe(false, true) // inconnu : on tente, la conversation se rabat sans outils si besoin
+    }
+
+    /** Les modèles « E » de Gemma (3n, 4) embarquent un encodeur audio. */
+    private fun hearsAudio(name: String): Boolean {
+        val n = name.lowercase(Locale.ROOT)
+        return (n.contains("gemma-4") || n.contains("gemma-3n") || n.contains("gemma4") || n.contains("gemma3n")) &&
+            (n.contains("e2b") || n.contains("e4b"))
+    }
+
     @OptIn(ExperimentalApi::class)
-    private fun createEngine(path: String, kind: String, mtp: Boolean, ctxN: Int): Engine {
-        val backend: Backend = if (kind == "GPU") Backend.GPU() else Backend.CPU(threadCount = bigCores())
+    private fun createEngine(path: String, a: Attempt): Engine {
+        val backend: Backend = if (a.kind == "GPU") Backend.GPU() else Backend.CPU(threadCount = bigCores())
         val cfg = EngineConfig(
             modelPath = path,
             backend = backend,
-            maxNumTokens = ctxN,
+            audioBackend = if (a.audio) Backend.CPU(threadCount = 2) else null, // l'encodeur audio doit être sur CPU
+            maxNumTokens = a.ctx,
             cacheDir = File(ctx.cacheDir, "litert").apply { mkdirs() }.absolutePath,
         )
-        ExperimentalFlags.enableSpeculativeDecoding = mtp
+        ExperimentalFlags.enableSpeculativeDecoding = a.mtp
         val e = Engine(cfg)
         try {
             e.initialize()
@@ -133,26 +175,25 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
         return e
     }
 
-    private fun supportsMtp(path: String): Boolean = try {
-        ModelInfo.from(path).use { info -> info is ModelInfo.Llm && info.hasSpeculativeDecodingSupport() }
-    } catch (t: Throwable) {
-        false
-    }
-
     /** Snapdragon 6 Gen 4 : 1 + 4 cœurs performants. On laisse les petits cœurs au système et à la voix. */
     private fun bigCores(): Int = (Runtime.getRuntime().availableProcessors() - 3).coerceIn(2, 6)
 
-    private fun systemPrompt(): String {
+    private fun systemPrompt(withSkills: Boolean): String {
         val now = SimpleDateFormat("EEEE d MMMM yyyy, HH:mm", Locale.FRANCE).format(Date())
         val sb = StringBuilder(prefs.persona.trim())
         sb.append("\n\nNous sommes le ").append(now).append('.')
         if (prefs.userName.isNotBlank()) sb.append(" Ton interlocuteur s'appelle ").append(prefs.userName.trim()).append('.')
+        if (withSkills) {
+            sb.append("\n\nTu disposes d'outils sur le téléphone (heure, calcul, minuteur, alarme, notes, mémoire, lampe, volume, ")
+                .append("applis, agenda, état du téléphone). Utilise-les dès qu'ils rendent la réponse plus juste ou font l'action demandée ; ")
+                .append("pour tout calcul, appelle toujours l'outil calculer. Après un outil, confirme en une phrase naturelle.")
+        }
+        sb.append(skills.memory.promptBlock())
         return sb.toString()
     }
 
     private fun newConversation(history: List<ChatMsg>): Conversation {
         val e = engine ?: error("moteur absent")
-        // On réinjecte la fin de l'historique dans ~40 % du contexte : Nox garde le fil, même après redémarrage.
         val budgetChars = (ctxTokens * CHARS_PER_TOKEN * 0.40).toInt()
         val kept = ArrayList<ChatMsg>()
         var used = 0
@@ -161,28 +202,41 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
             if (used + m.text.length > budgetChars) break
             kept.add(0, m); used += m.text.length
         }
-        while (kept.isNotEmpty() && !kept.first().fromUser) kept.removeAt(0) // doit commencer par l'utilisateur
+        while (kept.isNotEmpty() && !kept.first().fromUser) kept.removeAt(0)
         val initial = kept.map { if (it.fromUser) Message.user(it.text) else Message.model(it.text) }
-        val sys = systemPrompt()
-        charsInContext = used + sys.length
         val sampler = SamplerConfig(topK = 40, topP = 0.95, temperature = prefs.temperature.toDouble())
-        return e.createConversation(
-            ConversationConfig(
-                systemInstruction = Contents.of(sys),
-                initialMessages = initial,
-                samplerConfig = sampler,
-                // Qwen3 & co : pas de longue « réflexion » cachée avant de répondre (variable de gabarit, ignorée par Gemma)
-                extraContext = mapOf("enable_thinking" to false),
+
+        fun build(withSkills: Boolean): Conversation {
+            val sys = systemPrompt(withSkills)
+            charsInContext = used + sys.length + if (withSkills) SKILLS_PROMPT_CHARS else 0
+            return e.createConversation(
+                ConversationConfig(
+                    systemInstruction = Contents.of(sys),
+                    initialMessages = initial,
+                    tools = if (withSkills) skills.providers() else emptyList(),
+                    samplerConfig = sampler,
+                    extraContext = mapOf("enable_thinking" to false),
+                    // Consigne + outils + historique calculés UNE fois maintenant : le 1er mot arrive bien plus vite.
+                    prefillPrefaceOnInit = true,
+                )
             )
-        )
+        }
+
+        val want = prefs.skillsEnabled && toolsCapable
+        if (want) {
+            try {
+                return build(true).also { skillsActive = true }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Compétences refusées par ce modèle, on continue sans", t)
+            }
+        }
+        skillsActive = false
+        return build(false)
     }
 
-    /** Recrée la conversation (nouveau sujet, réglages modifiés…) sans recharger le modèle. */
     fun resetConversation(history: List<ChatMsg>, done: (() -> Unit)? = null) {
         worker.execute {
-            try {
-                conversation?.close()
-            } catch (_: Throwable) {}
+            try { conversation?.close() } catch (_: Throwable) {}
             conversation = null
             if (engine != null) {
                 try { conversation = newConversation(history) } catch (t: Throwable) { Log.e(TAG, "reset", t) }
@@ -193,15 +247,21 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
 
     // ------------------------------------------------------------------ génération
 
-    /**
-     * @param history historique AVANT ce message (sert à compacter la mémoire si le contexte sature).
-     */
-    fun send(text: String, history: List<ChatMsg>, l: StreamListener) {
+    fun send(text: String, history: List<ChatMsg>, l: StreamListener) = submit(Message.user(text), text.length, null, history, l)
+
+    /** Écoute native : le son brut part directement dans Gemma, qui transcrit puis répond. */
+    fun sendAudio(wav: ByteArray, durationMs: Long, history: List<ChatMsg>, l: StreamListener) {
+        val msg = Message.user(Contents.of(Content.AudioBytes(wav), Content.Text(AUDIO_INSTRUCTION)))
+        // ~25 jetons audio par seconde chez Gemma
+        val approxChars = ((durationMs / 1000.0) * 25 * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
+        submit(msg, approxChars, TranscriptExtractor(), history, l)
+    }
+
+    private fun submit(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener) {
         if (busy) return
         busy = true
         worker.execute {
-            // Contexte bientôt plein ? On repart d'une conversation fraîche avec la fin de l'historique.
-            val projected = charsInContext + text.length + 1200
+            val projected = charsInContext + approxChars + 1200
             if (projected > ctxTokens * CHARS_PER_TOKEN * 0.80) {
                 Log.i(TAG, "Compactage du contexte")
                 try { conversation?.close() } catch (_: Throwable) {}
@@ -213,15 +273,19 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
                 post { l.onError("Le modèle n'est pas prêt") }
                 return@execute
             }
-            charsInContext += text.length
+            charsInContext += approxChars
             val t0 = System.nanoTime()
             var tFirst = 0L
             var chars = 0
-            val filter = ThinkFilter()
+            val think = ThinkFilter()
             try {
-                conv.sendMessageAsync(Message.user(text), object : MessageCallback {
+                conv.sendMessageAsync(msg, object : MessageCallback {
                     override fun onMessage(message: Message) {
-                        val chunk = filter.feed(message.toString())
+                        var chunk = think.feed(message.toString())
+                        if (transcript != null) {
+                            chunk = transcript.feed(chunk)
+                            transcript.take()?.let { heard -> post { l.onTranscript(heard) } }
+                        }
                         if (chunk.isEmpty()) return
                         if (tFirst == 0L) tFirst = System.nanoTime()
                         chars += chunk.length
@@ -229,6 +293,7 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
                     }
 
                     override fun onDone() {
+                        transcript?.flush()?.let { rest -> if (rest.isNotEmpty()) { chars += rest.length; post { l.onChunk(rest) } } }
                         charsInContext += chars
                         busy = false
                         val stats = stats(t0, tFirst, chars)
@@ -276,6 +341,8 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
 
     private fun closeInternal() {
         ready = false
+        audioReady = false
+        skillsActive = false
         try { conversation?.close() } catch (_: Throwable) {}
         try { engine?.close() } catch (_: Throwable) {}
         conversation = null
@@ -287,8 +354,62 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val 
 
     companion object {
         private const val TAG = "NoxLLM"
-        /** Approximation pour le français avec le tokenizer Gemma. */
         const val CHARS_PER_TOKEN = 3.6
+        /** Estimation de la place prise par la description des outils dans le contexte. */
+        private const val SKILLS_PROMPT_CHARS = 4200
+
+        const val AUDIO_INSTRUCTION =
+            "Ceci est un message vocal de ton interlocuteur. Écris d'abord, seul sur la première ligne, " +
+            "la transcription fidèle de ce qu'il dit entre doubles crochets, comme ceci : [[texte entendu]]. " +
+            "Puis, à la ligne, réponds-lui normalement, comme s'il t'avait parlé de vive voix."
+    }
+}
+
+/**
+ * Extrait la ligne [[transcription]] que Gemma écrit en tête de réponse en écoute native,
+ * pour l'afficher dans la bulle de l'utilisateur sans la lire à voix haute.
+ */
+class TranscriptExtractor {
+    private val buf = StringBuilder()
+    private var done = false
+    private var heard: String? = null
+
+    private var trimNext = true
+
+    fun feed(chunk: String): String {
+        if (done) {
+            if (!trimNext) return chunk
+            val t = chunk.trimStart()
+            if (t.isNotEmpty()) trimNext = false
+            return t
+        }
+        buf.append(chunk)
+        val s = buf.toString()
+        val trimmed = s.trimStart()
+        if (trimmed.isEmpty()) return ""
+        if (!trimmed.startsWith("[[") && !"[[".startsWith(trimmed)) { done = true; trimNext = false; buf.setLength(0); return s }
+        val end = trimmed.indexOf("]]")
+        if (end >= 0) {
+            heard = trimmed.substring(2, end).trim().trim('"', '«', '»', ' ')
+            done = true
+            buf.setLength(0)
+            val rest = trimmed.substring(end + 2).trimStart()
+            if (rest.isNotEmpty()) trimNext = false
+            return rest
+        }
+        if (trimmed.length > 600) { done = true; trimNext = false; buf.setLength(0); return trimmed } // pas de fermeture : on abandonne
+        return ""
+    }
+
+    /** Transcription disponible (une seule fois). */
+    fun take(): String? = heard.also { heard = null }
+
+    fun flush(): String? {
+        if (done) return null
+        done = true
+        val rest = buf.toString().removePrefix("[[").trim()
+        buf.setLength(0)
+        return rest
     }
 }
 
@@ -313,7 +434,6 @@ class ThinkFilter {
                 inThink = !inThink
                 continue
             }
-            // Garde en réserve un éventuel début de balise coupé ("<thi")
             var keep = 0
             for (k in minOf(tag.length - 1, pending.length) downTo 1) {
                 if (tag.startsWith(pending.substring(pending.length - k))) { keep = k; break }
@@ -322,7 +442,6 @@ class ThinkFilter {
             pending.delete(0, pending.length - keep)
             break
         }
-        // Pas d'espaces/retours à la ligne en tête de réponse (restes d'un bloc vide)
         var text = out.toString()
         if (!started) {
             text = text.trimStart()

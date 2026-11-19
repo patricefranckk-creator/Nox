@@ -55,6 +55,16 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("pitch", 0.95f)
         set(v) = sp.edit().putFloat("pitch", v).apply()
 
+    /** "native" = l'audio va directement dans Gemma (modèles E) · "android" = reconnaissance vocale du téléphone. */
+    var listenMode: String
+        get() = sp.getString("listen_mode", "native") ?: "native"
+        set(v) = sp.edit().putString("listen_mode", v).apply()
+
+    /** Outils locaux (minuteur, notes, mémoire…) proposés au modèle. */
+    var skillsEnabled: Boolean
+        get() = sp.getBoolean("skills", true)
+        set(v) = sp.edit().putBoolean("skills", v).apply()
+
     var voiceName: String
         get() = sp.getString("voice", "") ?: ""
         set(v) = sp.edit().putString("voice", v).apply()
