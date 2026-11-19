@@ -54,4 +54,16 @@ app/src/main/java/com/application/nox/
   ModelsDialog.kt / SettingsDialog.kt / Markdown.kt / Ui.kt / Prefs.kt / ChatStore.kt
 ```
 
-Importer un autre modèle : n'importe quel `.litertlm` (Hugging Face › litert-community) via ◉ › Importer.
+## Catalogue (◉)
+
+| Modèle | Taille | Remarque |
+|---|---|---|
+| Gemma 4 E2B | 2,6 Go | conseillé, turbo MTP |
+| Gemma 4 E4B | 3,65 Go | plus intelligent, plus lent |
+| Qwen3 1.7B | 0,9 Go | très rapide, réflexion coupée |
+| Qwen3.5 0.8B | 1 Go | ultra léger, CPU |
+| Qwen3.5 4B | 2,75 Go | costaud, CPU uniquement |
+| Phi-4 mini | 3,9 Go | Microsoft, contexte 4K |
+
+Autres modèles : colle un lien Hugging Face vers un `.litertlm` dans ◉ › « Depuis un lien Hugging Face », ou importe un fichier déjà présent sur le téléphone.
+Les modèles marqués CPU ignorent le réglage GPU (leur démarrage GPU sature les téléphones 8 Go). Le contexte est automatiquement limité à ce que chaque fichier accepte.

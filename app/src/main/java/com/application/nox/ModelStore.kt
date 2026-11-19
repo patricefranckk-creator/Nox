@@ -20,6 +20,10 @@ class ModelStore(private val ctx: Context) {
         val url: String,
         val sizeBytes: Long,
         val pitch: String,
+        /** Le GPU est déconseillé (crashs ou plus lent que le CPU sur les téléphones 8 Go). */
+        val cpuOnly: Boolean = false,
+        /** Taille de contexte maximale compilée dans le fichier. */
+        val maxCtx: Int = 8192,
     )
 
     val catalog = listOf(
@@ -37,7 +41,41 @@ class ModelStore(private val ctx: Context) {
             3_650_000_000L,
             "Nettement plus intelligent, environ 2× plus lent. Ferme les autres applis : la RAM sera juste.",
         ),
+        Spec(
+            "qwen3-1.7b", "Qwen3 1.7B  ·  petit et vif",
+            "Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm",
+            "https://huggingface.co/litert-community/Qwen3-1.7B/resolve/main/Qwen3-1.7B_dynamic_wi4b32_afp32.litertlm",
+            932_000_000L,
+            "Moins d'1 Go, très rapide sur CPU. Le mode « réflexion » est coupé pour répondre tout de suite.",
+            maxCtx = 4096,
+        ),
+        Spec(
+            "qwen35-0.8b", "Qwen3.5 0.8B  ·  ultra léger",
+            "Qwen3.5-0.8B_int8.litertlm",
+            "https://huggingface.co/litert-community/Qwen3.5-0.8B/resolve/main/Qwen3.5-0.8B_int8.litertlm",
+            964_566_992L,
+            "Le plus rapide de tous, réponses simples. Tourne en CPU (plus rapide que le GPU pour ce modèle).",
+            cpuOnly = true, maxCtx = 4096,
+        ),
+        Spec(
+            "qwen35-4b", "Qwen3.5 4B  ·  costaud",
+            "Qwen3.5-4B_mixed_int4.litertlm",
+            "https://huggingface.co/litert-community/Qwen3.5-4B/resolve/main/Qwen3.5-4B_mixed_int4.litertlm",
+            2_754_166_784L,
+            "Génération récente, raisonne bien. CPU uniquement : son démarrage GPU sature les téléphones 8 Go.",
+            cpuOnly = true, maxCtx = 4096,
+        ),
+        Spec(
+            "phi4-mini", "Phi-4 mini  ·  Microsoft",
+            "Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.litertlm",
+            "https://huggingface.co/litert-community/Phi-4-mini-instruct/resolve/main/Phi-4-mini-instruct_multi-prefill-seq_q8_ekv4096.litertlm",
+            3_910_000_000L,
+            "3,8 milliards de paramètres, logique solide, plus lent. Son français est correct sans plus.",
+            maxCtx = 4096,
+        ),
     )
+
+    fun specForFile(name: String): Spec? = catalog.firstOrNull { it.file == name }
 
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -53,8 +91,24 @@ class ModelStore(private val ctx: Context) {
     }
 
     /** Tous les .litertlm présents (catalogue + imports). */
-    fun localModels(): List<File> =
-        dir().listFiles { f -> f.isFile && f.name.endsWith(".litertlm") }?.sortedBy { it.name }.orEmpty()
+    fun localModels(): List<File> {
+        val busy = downloadingFiles()
+        return dir().listFiles { f -> f.isFile && f.name.endsWith(".litertlm") && f.name !in busy }
+            ?.sortedBy { it.name }.orEmpty()
+    }
+
+    /** Fichiers en cours de téléchargement (catalogue + liens perso) : jamais proposés tant qu'incomplets. */
+    fun downloadingFiles(): Set<String> {
+        val out = HashSet<String>()
+        catalog.forEach { if (activeDownloadId(it) >= 0) out += it.file }
+        customDownloads().forEach { (file, id) -> if (isActive(id)) out += file }
+        return out
+    }
+
+    private fun isActive(id: Long): Boolean {
+        val st = statusOf(id)?.first ?: return false
+        return st == DownloadManager.STATUS_RUNNING || st == DownloadManager.STATUS_PENDING || st == DownloadManager.STATUS_PAUSED
+    }
 
     fun totalRamGb(): Double {
         val mi = ActivityManager.MemoryInfo()
@@ -107,6 +161,59 @@ class ModelStore(private val ctx: Context) {
             return Triple(st, got, tot)
         }
         return null
+    }
+
+    // ----------------------------------------------------------- lien Hugging Face perso
+
+    private val customPrefs get() = ctx.getSharedPreferences("nox_dl_custom", Context.MODE_PRIVATE)
+
+    /** fichier → id DownloadManager */
+    fun customDownloads(): Map<String, Long> =
+        customPrefs.all.mapNotNull { (k, v) -> (v as? Long)?.let { k to it } }.toMap()
+
+    /**
+     * Accepte un lien Hugging Face vers un .litertlm (page « blob » ou lien direct « resolve »).
+     * @return null si OK, sinon le message d'erreur.
+     */
+    fun downloadUrl(raw: String): String? {
+        var url = raw.trim()
+        if (!url.startsWith("http")) url = "https://$url"
+        url = url.substringBefore('?').substringBefore('#')
+        if (url.contains("huggingface.co") && url.contains("/blob/")) url = url.replace("/blob/", "/resolve/")
+        val name = Uri.decode(url.substringAfterLast('/'))
+        if (!name.endsWith(".litertlm")) return "Le lien doit pointer vers un fichier .litertlm"
+        if (name.contains('/') || name.startsWith(".")) return "Nom de fichier invalide"
+        val old = customPrefs.getLong(name, -1)
+        if (old >= 0 && isActive(old)) return "Ce fichier est déjà en cours de téléchargement"
+        File(dir(), name).delete()
+        val req = DownloadManager.Request(Uri.parse(url))
+            .setTitle("Nox · $name")
+            .setDescription("Modèle personnalisé")
+            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            .setDestinationInExternalFilesDir(ctx, "models", name)
+            .setAllowedOverMetered(true)
+        val id = try { dm.enqueue(req) } catch (t: Throwable) { return "Lien refusé : ${t.message}" }
+        customPrefs.edit().putLong(name, id).apply()
+        return null
+    }
+
+    fun cancelCustom(file: String) {
+        val id = customPrefs.getLong(file, -1)
+        if (id >= 0) dm.remove(id)
+        customPrefs.edit().remove(file).apply()
+    }
+
+    /** Oublie les téléchargements perso terminés (réussis ou échoués). Renvoie les échecs. */
+    fun pruneCustom(): List<String> {
+        val failed = mutableListOf<String>()
+        customDownloads().forEach { (file, id) ->
+            val st = statusOf(id)?.first
+            if (st == null || st == DownloadManager.STATUS_SUCCESSFUL || st == DownloadManager.STATUS_FAILED) {
+                if (st == DownloadManager.STATUS_FAILED) { failed += file; File(dir(), file).delete() }
+                customPrefs.edit().remove(file).apply()
+            }
+        }
+        return failed
     }
 
     // ----------------------------------------------------------- import

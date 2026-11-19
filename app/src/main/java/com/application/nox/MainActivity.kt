@@ -66,7 +66,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
         prefs = Prefs(this)
         store = ModelStore(this)
         chats = ChatStore(this)
-        engine = LlmEngine(this, prefs)
+        engine = LlmEngine(this, prefs, store)
         voiceOut = VoiceOut(this, prefs, this)
 
         window.setDecorFitsSystemWindows(false)   // bord à bord partout, on gère les marges nous-mêmes
@@ -83,10 +83,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener {
     /** Si un téléchargement se termine pendant que Nox dort, on le branche automatiquement. */
     private val autoPlug = object : Runnable {
         override fun run() {
+            store.pruneCustom().forEach { toast("Échec du téléchargement de $it (lien privé ou invalide ?)") }
             if (!engine.ready && !loading && (prefs.modelPath.isBlank() || !java.io.File(prefs.modelPath).exists())) {
-                val ready = store.catalog.firstOrNull { store.isInstalled(it) && store.activeDownloadId(it) < 0 }
+                val ready = store.localModels().firstOrNull()
                 if (ready != null) {
-                    prefs.modelPath = store.fileFor(ready).absolutePath
+                    prefs.modelPath = ready.absolutePath
                     toast("Modèle téléchargé, réveil de Nox !")
                     loadModel()
                 }

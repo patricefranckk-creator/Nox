@@ -8,6 +8,10 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -21,13 +25,18 @@ import java.io.File
 class ModelsDialog(private val a: MainActivity) {
 
     private val store = a.store
+    private var urlField: EditText? = null
+    private var wasActive = true
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var body: LinearLayout
     private var dialog: AlertDialog? = null
     private val ticker = object : Runnable {
         override fun run() {
             if (dialog?.isShowing != true) return
-            render()
+            // On ne reconstruit la liste que si un téléchargement bouge, et jamais pendant la saisie d'un lien
+            val active = store.downloadingFiles().isNotEmpty() || store.customDownloads().isNotEmpty()
+            if ((active || wasActive) && urlField?.hasFocus() != true) render()
+            wasActive = active
             handler.postDelayed(this, 800)
         }
     }
@@ -58,8 +67,10 @@ class ModelsDialog(private val a: MainActivity) {
         body.addView(a.text("Tout tourne sur ton téléphone. Internet ne sert qu'à ce téléchargement unique.", 12.5f, Ui.MUTED)
             .apply { setPadding(0, a.dp(2), 0, 0) })
 
-        body.addView(a.sectionTitle("Catalogue"))
-        store.catalog.forEach { body.addView(card(it)) }
+        body.addView(a.sectionTitle("Gemma 4 · modèles « E »"))
+        store.catalog.filter { it.id.startsWith("gemma") }.forEach { body.addView(card(it)) }
+        body.addView(a.sectionTitle("Autres familles"))
+        store.catalog.filterNot { it.id.startsWith("gemma") }.forEach { body.addView(card(it)) }
 
         val imported = store.localModels().filter { f -> store.catalog.none { it.file == f.name } }
         if (imported.isNotEmpty()) {
@@ -67,15 +78,50 @@ class ModelsDialog(private val a: MainActivity) {
             imported.forEach { body.addView(fileCard(it)) }
         }
 
-        body.addView(a.sectionTitle("Avancé"))
-        body.addView(a.text("Tu peux importer n'importe quel modèle .litertlm (Hugging Face › litert-community).", 13f, Ui.MUTED))
-        body.addView(row(a.pillButton("Importer un fichier .litertlm", filled = false) { pickFile() }))
+        val custom = store.customDownloads()
+        if (custom.isNotEmpty()) {
+            body.addView(a.sectionTitle("Téléchargements perso"))
+            custom.forEach { (file, id) -> body.addView(customCard(file, id)) }
+        }
+
+        body.addView(a.sectionTitle("Depuis un lien Hugging Face"))
+        body.addView(a.text("Colle le lien d'un fichier .litertlm (page du fichier ou lien de téléchargement).", 13f, Ui.MUTED))
+        urlField = EditText(a).apply {
+            setText(pendingUrl)
+            hint = "huggingface.co/…/modele.litertlm"
+            setHintTextColor(Ui.MUTED)
+            setTextColor(Ui.TEXT)
+            textSize = 13.5f
+            isSingleLine = true
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            background = Ui.rounded(Ui.SURFACE, a.dp(14).toFloat(), Ui.STROKE, a.dp(1))
+            setPadding(a.dp(14), a.dp(10), a.dp(14), a.dp(10))
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, af: Int) {}
+                override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) { pendingUrl = s?.toString() ?: "" }
+                override fun afterTextChanged(s: Editable?) {}
+            })
+        }
+        body.addView(urlField, LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(8) })
+        body.addView(row(a.pillButton("Télécharger ce lien") {
+            val err = store.downloadUrl(pendingUrl)
+            if (err != null) a.toast(err) else {
+                pendingUrl = ""
+                a.toast("Téléchargement lancé")
+            }
+            render()
+        }).apply { setPadding(0, a.dp(8), 0, 0) })
+
+        body.addView(a.sectionTitle("Depuis le téléphone"))
+        body.addView(a.text("Un .litertlm déjà téléchargé (navigateur, Drive…) ?", 13f, Ui.MUTED))
+        body.addView(row(a.pillButton("Importer un fichier .litertlm", filled = false) { pickFile() }).apply { setPadding(0, a.dp(8), 0, 0) })
     }
 
     private fun card(s: ModelStore.Spec): View {
         val box = cardBox(selected = a.prefs.modelPath == store.fileFor(s).absolutePath && store.isInstalled(s))
         box.addView(a.text(s.title, 16f, Ui.TEXT, bold = true))
-        box.addView(a.text("${ModelStore.human(s.sizeBytes)} · ${s.pitch}", 13f, Ui.MUTED).apply { setPadding(0, a.dp(4), 0, a.dp(8)) })
+        val cpuTag = if (s.cpuOnly) " · CPU" else ""
+        box.addView(a.text("${ModelStore.human(s.sizeBytes)}$cpuTag · ${s.pitch}", 13f, Ui.MUTED).apply { setPadding(0, a.dp(4), 0, a.dp(8)) })
 
         val dlId = store.activeDownloadId(s)
         when {
@@ -113,6 +159,29 @@ class ModelsDialog(private val a: MainActivity) {
                 }))
             }
         }
+        return box
+    }
+
+    private fun customCard(file: String, id: Long): View {
+        val box = cardBox(false)
+        box.addView(a.text(file.removeSuffix(".litertlm"), 15f, Ui.TEXT, bold = true))
+        val st = store.statusOf(id)
+        val got = st?.second ?: 0L
+        val tot = st?.third ?: -1L
+        val pct = if (tot > 0) (got * 100 / tot).toInt() else 0
+        box.addView(ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; progress = pct; isIndeterminate = tot <= 0
+            progressTintList = android.content.res.ColorStateList.valueOf(Ui.CYAN)
+        }, LinearLayout.LayoutParams(-1, a.dp(8)).apply { topMargin = a.dp(8) })
+        val label = when (st?.first) {
+            DownloadManager.STATUS_FAILED -> "Échec (lien privé, protégé par licence ou invalide)"
+            DownloadManager.STATUS_SUCCESSFUL -> "Terminé"
+            DownloadManager.STATUS_PAUSED -> "En pause (réseau ?) · $pct %"
+            DownloadManager.STATUS_PENDING -> "En attente…"
+            else -> if (tot > 0) "$pct % · ${ModelStore.human(got)} / ${ModelStore.human(tot)}" else ModelStore.human(got)
+        }
+        box.addView(a.text(label, 12.5f, Ui.MUTED).apply { setPadding(0, a.dp(6), 0, a.dp(6)) })
+        box.addView(row(a.pillButton("Annuler", filled = false) { store.cancelCustom(file); render() }))
         return box
     }
 
@@ -184,6 +253,8 @@ class ModelsDialog(private val a: MainActivity) {
     companion object {
         const val REQ_IMPORT = 4242
         private var current: ModelsDialog? = null
+        /** Survit au rafraîchissement de la liste (toutes les 0,8 s) pendant la saisie. */
+        private var pendingUrl = ""
 
         fun onImportResult(a: MainActivity, resultCode: Int, data: Intent?) {
             val uri = data?.data

@@ -27,7 +27,7 @@ import java.util.concurrent.Executors
  * Cerveau local de Nox : LiteRT-LM (Google) avec accélération GPU Adreno,
  * décodage spéculatif MTP et repli automatique sur CPU.
  */
-class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
+class LlmEngine(private val ctx: Context, private val prefs: Prefs, private val store: ModelStore) {
 
     interface StreamListener {
         fun onChunk(text: String)
@@ -46,6 +46,9 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
     var backendLabel = ""; private set
     var modelLabel = ""; private set
 
+    /** Contexte réellement utilisé (borné par ce que le fichier du modèle accepte). */
+    private var ctxTokens = 4096
+
     /** Nombre de caractères injectés dans la conversation courante (estimation de l'occupation du contexte). */
     private var charsInContext = 0
 
@@ -59,26 +62,31 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
                 post { onResult(false, "Aucun modèle installé") }
                 return@execute
             }
-            modelLabel = File(path).nameWithoutExtension
-            val wantGpu = prefs.backend == "gpu"
+            val spec = store.specForFile(File(path).name)
+            modelLabel = spec?.title?.substringBefore("  ") ?: File(path).nameWithoutExtension
+            val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true
             val mtpCapable = prefs.turbo && supportsMtp(path)
+            val ctxWanted = minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE)
 
             // Cascade : GPU+MTP → GPU → CPU (le premier qui démarre gagne)
-            val attempts = mutableListOf<Pair<String, Boolean>>()
+            val attempts = mutableListOf<Triple<String, Boolean, Int>>()
             if (wantGpu) {
-                if (mtpCapable) attempts += "GPU" to true
-                attempts += "GPU" to false
+                if (mtpCapable) attempts += Triple("GPU", true, ctxWanted)
+                attempts += Triple("GPU", false, ctxWanted)
             }
-            if (mtpCapable && !wantGpu) attempts += "CPU" to true
-            attempts += "CPU" to false
+            if (mtpCapable && !wantGpu) attempts += Triple("CPU", true, ctxWanted)
+            attempts += Triple("CPU", false, ctxWanted)
+            // Modèle importé au contexte inconnu : dernier essai prudent en 4K
+            if (ctxWanted > 4096) attempts += Triple("CPU", false, 4096)
 
             var lastErr: Throwable? = null
-            for ((kind, mtp) in attempts) {
+            for ((kind, mtp, ctxN) in attempts) {
                 post { onStatus("Démarrage $kind${if (mtp) " + turbo MTP" else ""}…") }
                 val t0 = System.currentTimeMillis()
                 try {
-                    val e = createEngine(path, kind, mtp)
+                    val e = createEngine(path, kind, mtp, ctxN)
                     engine = e
+                    ctxTokens = ctxN
                     backendLabel = kind + if (mtp) "·MTP" else ""
                     Log.i(TAG, "Moteur prêt en ${System.currentTimeMillis() - t0} ms ($backendLabel)")
                     break
@@ -104,12 +112,12 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
     }
 
     @OptIn(ExperimentalApi::class)
-    private fun createEngine(path: String, kind: String, mtp: Boolean): Engine {
+    private fun createEngine(path: String, kind: String, mtp: Boolean, ctxN: Int): Engine {
         val backend: Backend = if (kind == "GPU") Backend.GPU() else Backend.CPU(threadCount = bigCores())
         val cfg = EngineConfig(
             modelPath = path,
             backend = backend,
-            maxNumTokens = prefs.contextTokens,
+            maxNumTokens = ctxN,
             cacheDir = File(ctx.cacheDir, "litert").apply { mkdirs() }.absolutePath,
         )
         ExperimentalFlags.enableSpeculativeDecoding = mtp
@@ -145,7 +153,7 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
     private fun newConversation(history: List<ChatMsg>): Conversation {
         val e = engine ?: error("moteur absent")
         // On réinjecte la fin de l'historique dans ~40 % du contexte : Nox garde le fil, même après redémarrage.
-        val budgetChars = (prefs.contextTokens * CHARS_PER_TOKEN * 0.40).toInt()
+        val budgetChars = (ctxTokens * CHARS_PER_TOKEN * 0.40).toInt()
         val kept = ArrayList<ChatMsg>()
         var used = 0
         for (m in history.asReversed()) {
@@ -163,6 +171,8 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
                 systemInstruction = Contents.of(sys),
                 initialMessages = initial,
                 samplerConfig = sampler,
+                // Qwen3 & co : pas de longue « réflexion » cachée avant de répondre (variable de gabarit, ignorée par Gemma)
+                extraContext = mapOf("enable_thinking" to false),
             )
         )
     }
@@ -192,7 +202,7 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
         worker.execute {
             // Contexte bientôt plein ? On repart d'une conversation fraîche avec la fin de l'historique.
             val projected = charsInContext + text.length + 1200
-            if (projected > prefs.contextTokens * CHARS_PER_TOKEN * 0.80) {
+            if (projected > ctxTokens * CHARS_PER_TOKEN * 0.80) {
                 Log.i(TAG, "Compactage du contexte")
                 try { conversation?.close() } catch (_: Throwable) {}
                 conversation = try { newConversation(history) } catch (t: Throwable) { null }
@@ -207,10 +217,11 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
             val t0 = System.nanoTime()
             var tFirst = 0L
             var chars = 0
+            val filter = ThinkFilter()
             try {
                 conv.sendMessageAsync(Message.user(text), object : MessageCallback {
                     override fun onMessage(message: Message) {
-                        val chunk = message.toString()
+                        val chunk = filter.feed(message.toString())
                         if (chunk.isEmpty()) return
                         if (tFirst == 0L) tFirst = System.nanoTime()
                         chars += chunk.length
@@ -278,5 +289,45 @@ class LlmEngine(private val ctx: Context, private val prefs: Prefs) {
         private const val TAG = "NoxLLM"
         /** Approximation pour le français avec le tokenizer Gemma. */
         const val CHARS_PER_TOKEN = 3.6
+    }
+}
+
+/**
+ * Masque les blocs <think>…</think> que certains modèles (Qwen3, Phi-4 reasoning…) écrivent
+ * avant leur réponse, même si une balise arrive coupée entre deux morceaux du flux.
+ */
+class ThinkFilter {
+    private val pending = StringBuilder()
+    private var inThink = false
+    private var started = false
+
+    fun feed(chunk: String): String {
+        pending.append(chunk)
+        val out = StringBuilder()
+        while (pending.isNotEmpty()) {
+            val tag = if (inThink) "</think>" else "<think>"
+            val idx = pending.indexOf(tag)
+            if (idx >= 0) {
+                if (!inThink) out.append(pending, 0, idx)
+                pending.delete(0, idx + tag.length)
+                inThink = !inThink
+                continue
+            }
+            // Garde en réserve un éventuel début de balise coupé ("<thi")
+            var keep = 0
+            for (k in minOf(tag.length - 1, pending.length) downTo 1) {
+                if (tag.startsWith(pending.substring(pending.length - k))) { keep = k; break }
+            }
+            if (!inThink) out.append(pending, 0, pending.length - keep)
+            pending.delete(0, pending.length - keep)
+            break
+        }
+        // Pas d'espaces/retours à la ligne en tête de réponse (restes d'un bloc vide)
+        var text = out.toString()
+        if (!started) {
+            text = text.trimStart()
+            if (text.isNotEmpty()) started = true
+        }
+        return text
     }
 }
