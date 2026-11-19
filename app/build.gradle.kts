@@ -1,4 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 plugins {
     id("com.android.application")
@@ -17,8 +20,7 @@ android {
         versionCode = build
         versionName = "2.1.$build"
         val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)
-        val date = java.time.LocalDateTime.now(java.time.ZoneId.of("Europe/Paris"))
-            .format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
+        val date = LocalDateTime.now(ZoneId.of("Europe/Paris")).format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
         resValue("string", "nox_commit", sha)
         resValue("string", "nox_build_date", date)
         ndk { abiFilters += listOf("arm64-v8a") }   // ton Snapdragon = ARM64 uniquement
