@@ -1,90 +1,101 @@
 package com.application.nox
 
-import android.graphics.Typeface
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.view.Gravity
-import android.widget.HorizontalScrollView
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.application.nox.Ui.dp
-import com.application.nox.Ui.text
 
 /**
- * Un tour de parole, dans l'esprit du fil de Lia : pas de bulles, une étiquette « TOI » / « NOX »,
- * la réponse de Nox en police à empattements, et autour d'elle ce qui l'a nourrie
- * (extraits de la bibliothèque, actions faites) puis des relances à toucher.
+ * Un tour de parole sur le fil de Lia : une ligne verticale à gauche, un point bleu pour Nox,
+ * « TOI » en orange aligné à droite, « NOX » en bleu ; autour de la réponse ce qui l'a nourrie
+ * (extraits de la bibliothèque, actions faites) puis les relances à toucher.
  */
-class TurnView(private val a: MainActivity, val msg: ChatMsg) : LinearLayout(a) {
+class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
 
     interface Actions {
         fun copy(m: ChatMsg)
         fun readAloud(m: ChatMsg)
+        fun edit(m: ChatMsg)
         fun quickReply(text: String)
     }
 
     val body: TextView
-    private val label: TextView
     private val contextBox: LinearLayout
     private val toolsBox: LinearLayout
-    private val footer: TextView
-    private val suggestRow: LinearLayout
-    private val suggestScroll: HorizontalScrollView
+    private val footer: LinearLayout
+    private val suggestBox: FlowLayout
+    private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.ACCENT }
     var actions: Actions? = null
 
     init {
         orientation = VERTICAL
+        setWillNotDraw(false)
         val user = msg.fromUser
         gravity = if (user) Gravity.END else Gravity.START
-        setPadding(if (user) a.dp(36) else a.dp(4), a.dp(14), a.dp(4), a.dp(6))
+        setPadding(a.dp(18), a.dp(13), a.dp(18), a.dp(13))
 
-        label = a.text(if (user) "TOI" else "NOX", 10.5f, if (user) Ui.USER_TAG else Ui.ACCENT, bold = true).apply {
-            letterSpacing = 0.18f
-        }
-        addView(label)
+        addView(TextView(a).apply {
+            text = if (user) "TOI" else "NOX"
+            setTextColor(if (user) Ui.USER_TAG else Ui.ACCENT)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Ui.BLACK
+            letterSpacing = 0.19f
+        })
 
         contextBox = LinearLayout(a).apply {
             orientation = VERTICAL
             visibility = GONE
-            setPadding(a.dp(12), a.dp(8), a.dp(12), a.dp(8))
-            background = Ui.rounded(0xFF111A30.toInt(), a.dp(12).toFloat(), 0xFF22305A.toInt(), a.dp(1))
+            setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
+            background = Ui.rounded(0xFF131C30.toInt(), a.dp(14).toFloat(), 0xFF22325A.toInt(), a.dp(1))
         }
-        addView(contextBox, LayoutParams(-1, -2).apply { topMargin = a.dp(6); marginStart = a.dp(14) })
+        addView(contextBox, LayoutParams(-1, -2).apply { topMargin = a.dp(10) })
 
         toolsBox = LinearLayout(a).apply { orientation = VERTICAL; visibility = GONE }
-        addView(toolsBox, LayoutParams(-2, -2).apply { topMargin = a.dp(4); marginStart = a.dp(14) })
+        addView(toolsBox, LayoutParams(-2, -2).apply { topMargin = a.dp(6) })
 
         body = TextView(a).apply {
-            setTextColor(if (user) Ui.USER_TEXT else Ui.TEXT)
             if (user) {
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
-                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+                setTextColor(Ui.USER_TEXT)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                typeface = Ui.BLACK
                 gravity = Gravity.END
-                setLineSpacing(0f, 1.3f)
+                setLineSpacing(0f, 1.25f)
             } else {
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
-                typeface = Typeface.SERIF
-                setLineSpacing(0f, 1.45f)
+                setTextColor(Ui.TEXT)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18.5f)
+                typeface = Ui.BOLD
+                setLineSpacing(0f, 1.38f)
             }
-            setTextIsSelectable(false)
         }
-        addView(body, LayoutParams(if (user) -2 else -1, -2).apply { topMargin = a.dp(6); if (!user) marginStart = a.dp(14) })
+        addView(body, LayoutParams(if (user) -2 else -1, -2).apply { topMargin = a.dp(if (user) 8 else 10) })
 
-        footer = a.text("", 11f, Ui.MUTED).apply { setPadding(0, a.dp(6), 0, 0) }
-        addView(footer, LayoutParams(-2, -2).apply { if (!user) marginStart = a.dp(14) })
+        footer = LinearLayout(a).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        addView(footer, LayoutParams(-2, -2).apply { topMargin = a.dp(6) })
 
-        suggestRow = LinearLayout(a).apply { orientation = HORIZONTAL }
-        suggestScroll = HorizontalScrollView(a).apply {
-            isHorizontalScrollBarEnabled = false
-            visibility = GONE
-            addView(suggestRow)
-        }
-        addView(suggestScroll, LayoutParams(-1, -2).apply { topMargin = a.dp(8); marginStart = a.dp(14) })
+        suggestBox = FlowLayout(a, a.dp(8)).apply { visibility = GONE }
+        addView(suggestBox, LayoutParams(-1, -2).apply { topMargin = a.dp(12) })
 
         render()
         refreshFooter()
         msg.sources.takeIf { it.isNotEmpty() }?.let { setSources(it) }
         msg.tools.forEach { addTool(it) }
         if (msg.suggestions.isNotEmpty()) setSuggestions(msg.suggestions)
+    }
+
+    /** Le point bleu sur la ligne du fil, devant « NOX ». */
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        if (!msg.fromUser) c.drawCircle((paddingLeft - a.dp(11)).toFloat(), paddingTop + a.dp(9).toFloat(), a.dp(5).toFloat(), dot)
     }
 
     fun render() {
@@ -96,39 +107,47 @@ class TurnView(private val a: MainActivity, val msg: ChatMsg) : LinearLayout(a) 
         }
     }
 
-    /** « 🎤 dit à voix haute · ⧉ copier · 🔊 relire » */
+    /** Petites icônes sous le message : copier, relire (Nox) ou modifier (toi). */
     fun refreshFooter() {
+        footer.removeAllViews()
         if (msg.text.isBlank()) { footer.visibility = GONE; return }
         footer.visibility = VISIBLE
-        val parts = ArrayList<String>()
-        if (msg.voice) parts += if (msg.fromUser) "🎤 dit à voix haute" else "🔊 lu à voix haute"
-        parts += "⧉ copier"
-        if (!msg.fromUser) parts += "▶ relire"
-        footer.text = parts.joinToString("   ")
-        footer.setOnClickListener(null)
-        footer.setOnTouchListener { v, e ->
-            if (e.action == android.view.MotionEvent.ACTION_UP) {
-                val tv = v as TextView
-                val off = tv.getOffsetForPosition(e.x, e.y)
-                val s = tv.text.toString()
-                val iCopy = s.indexOf("⧉"); val iRead = s.indexOf("▶")
-                when {
-                    iRead >= 0 && off >= iRead -> actions?.readAloud(msg)
-                    iCopy >= 0 && off >= iCopy -> actions?.copy(msg)
-                }
-                v.performClick()
-            }
-            true
-        }
+        if (msg.fromUser) footer.addView(icon("ic_edit", "Modifier") { actions?.edit(msg) })
+        footer.addView(icon("ic_copy", "Copier") { actions?.copy(msg) })
+        if (!msg.fromUser) footer.addView(icon("ic_volume", "Relire à voix haute") { actions?.readAloud(msg) })
+        if (msg.voice) footer.addView(TextView(a).apply {
+            text = if (msg.fromUser) "dit à voix haute" else "lu à voix haute"
+            setTextColor(Ui.FAINT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Ui.BOLD
+            setPadding(a.dp(2), 0, 0, 0)
+        })
+    }
+
+    private fun icon(name: String, desc: String, onClick: () -> Unit) = ImageView(a).apply {
+        val id = a.resources.getIdentifier(name, "drawable", a.packageName)
+        if (id != 0) setImageResource(id)
+        setColorFilter(Ui.FAINT)
+        contentDescription = desc
+        setPadding(a.dp(4), a.dp(4), a.dp(4), a.dp(4))
+        layoutParams = LayoutParams(a.dp(26), a.dp(26)).apply { marginEnd = a.dp(10) }
+        background = Ui.ripple(Ui.rounded(0, a.dp(13).toFloat()))
+        setOnClickListener { onClick() }
     }
 
     /** Carte « Dans ta bibliothèque » : ce que Nox a relu avant de répondre. */
     fun setSources(titles: List<String>) {
         msg.sources = titles
         contextBox.removeAllViews()
-        contextBox.addView(a.text("📚  DANS TA BIBLIOTHÈQUE", 10f, Ui.CYAN, bold = true).apply { letterSpacing = 0.14f })
+        contextBox.addView(TextView(a).apply {
+            text = "DANS TA BIBLIOTHÈQUE"
+            setTextColor(0xFF7FBFFF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); typeface = Ui.BLACK
+            letterSpacing = 0.15f
+        })
         titles.take(4).forEach { t ->
-            contextBox.addView(a.text("•  $t", 12.5f, Ui.MUTED).apply { maxLines = 2; setPadding(0, a.dp(3), 0, 0) })
+            contextBox.addView(TextView(a).apply {
+                text = t
+                setTextColor(Ui.MUTED); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
+                maxLines = 2; setPadding(0, a.dp(3), 0, 0)
+            })
         }
         contextBox.visibility = VISIBLE
     }
@@ -137,26 +156,70 @@ class TurnView(private val a: MainActivity, val msg: ChatMsg) : LinearLayout(a) 
     fun addTool(label: String) {
         if (label !in msg.tools) msg.tools += label
         toolsBox.visibility = VISIBLE
-        toolsBox.addView(a.text(label, 12f, Ui.CYAN).apply {
-            setPadding(a.dp(10), a.dp(4), a.dp(10), a.dp(4))
-            background = Ui.rounded(0xFF0F1E2A.toInt(), a.dp(12).toFloat(), 0xFF1D4A5E.toInt(), a.dp(1))
+        toolsBox.addView(TextView(a).apply {
+            text = label
+            setTextColor(Ui.CYAN); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
+            setPadding(a.dp(11), a.dp(5), a.dp(11), a.dp(5))
+            background = Ui.rounded(0xFF0F2235.toInt(), a.dp(12).toFloat(), 0xFF1D4A6E.toInt(), a.dp(1))
         }, LayoutParams(-2, -2).apply { topMargin = a.dp(4) })
     }
 
     /** Relances proposées par Nox : un tap = l'envoyer. */
     fun setSuggestions(list: List<String>) {
         msg.suggestions = list
-        suggestRow.removeAllViews()
-        if (list.isEmpty()) { suggestScroll.visibility = GONE; return }
+        suggestBox.removeAllViews()
+        if (list.isEmpty()) { suggestBox.visibility = GONE; return }
         list.forEach { s ->
-            suggestRow.addView(a.text(s, 13f, Ui.TEXT).apply {
-                setPadding(a.dp(14), a.dp(8), a.dp(14), a.dp(8))
-                background = Ui.ripple(Ui.rounded(0x00000000, a.dp(18).toFloat(), Ui.ACCENT, a.dp(1)))
+            suggestBox.addView(TextView(a).apply {
+                text = s
+                setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Ui.BOLD
+                setPadding(a.dp(15), a.dp(9), a.dp(15), a.dp(9))
+                background = Ui.ripple(Ui.rounded(0, a.dp(20).toFloat(), Ui.ACCENT, a.dp(1.5f)))
                 setOnClickListener { actions?.quickReply(s) }
-            }, LayoutParams(-2, -2).apply { marginEnd = a.dp(8) })
+            })
         }
-        suggestScroll.visibility = VISIBLE
+        suggestBox.visibility = VISIBLE
     }
 
-    fun clearSuggestions() { suggestScroll.visibility = GONE }
+    fun clearSuggestions() { suggestBox.visibility = GONE }
+
+    /** Ligne verticale fixe du fil, dessinée derrière la conversation qui défile. */
+    class Timeline(private val x: Float, private val w: Float) : Drawable() {
+        private val p = Paint().apply { color = Ui.TIMELINE }
+        override fun draw(c: Canvas) { c.drawRect(x - w / 2, bounds.top.toFloat(), x + w / 2, bounds.bottom.toFloat(), p) }
+        override fun setAlpha(alpha: Int) { p.alpha = alpha }
+        override fun setColorFilter(cf: ColorFilter?) { p.colorFilter = cf }
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity() = PixelFormat.TRANSLUCENT
+    }
+}
+
+/** Disposition en lignes qui passent à la ligne (relances, favoris). */
+class FlowLayout(ctx: Context, private val gap: Int) : ViewGroup(ctx) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val maxW = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+        var x = 0; var y = 0; var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == View.GONE) continue
+            c.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            if (x > 0 && x + c.measuredWidth > maxW) { x = 0; y += rowH + gap; rowH = 0 }
+            x += c.measuredWidth + gap
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), y + rowH + paddingTop + paddingBottom)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val maxW = r - l - paddingLeft - paddingRight
+        var x = 0; var y = 0; var rowH = 0
+        for (i in 0 until childCount) {
+            val c = getChildAt(i)
+            if (c.visibility == View.GONE) continue
+            if (x > 0 && x + c.measuredWidth > maxW) { x = 0; y += rowH + gap; rowH = 0 }
+            c.layout(paddingLeft + x, paddingTop + y, paddingLeft + x + c.measuredWidth, paddingTop + y + c.measuredHeight)
+            x += c.measuredWidth + gap
+            rowH = maxOf(rowH, c.measuredHeight)
+        }
+    }
 }

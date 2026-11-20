@@ -224,6 +224,9 @@ class LlmEngine(
             sb.append("\n\nTu agis vraiment sur le téléphone grâce à tes outils. Dès qu'on te demande une action ou une info du téléphone ")
                 .append("(heure, minuteur, rappel, liste, musique, appel, SMS, trajet, appli, réglage, agenda…), appelle l'outil au lieu de répondre de tête. ")
                 .append("Tout calcul passe par « calculer ». Pour une question de connaissances (définition, histoire, santé, pratique…) ou si l'utilisateur évoque quelque chose qu'il t'a déjà dit, noté ou importé, cherche d'abord dans « bibliotheque ». ")
+                .append("Pour agir dans une autre appli (WhatsApp, Gmail, réglages…), enchaîne : « ouvrir » l'appli, « ecran » lire, puis toucher/écrire, en relisant l'écran après chaque geste. ")
+                .append("Avant d'envoyer, payer ou supprimer quoi que ce soit, demande confirmation à l'utilisateur. ")
+                .append("Pour les messages reçus, utilise « notifications ». ")
                 .append("Après une action, confirme en une phrase naturelle, sans détailler l'outil.")
         }
         if (withSkills) {
@@ -325,17 +328,31 @@ class LlmEngine(
 
     /** Écoute native : le son brut part directement dans Gemma, qui transcrit puis répond. */
     fun sendAudio(wavs: List<ByteArray>, durationMs: Long, history: List<ChatMsg>, l: StreamListener) {
-        val parts = ArrayList<Content>()
-        wavs.forEach { parts += Content.AudioBytes(it) }
-        parts += Content.Text(AUDIO_INSTRUCTION)
-        val msg = Message.user(Contents.of(parts))
-        // estimation prudente du coût de l'audio dans le contexte
-        val approxChars = ((durationMs / 1000.0) * AUDIO_TOKENS_PER_S * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
         if (busy) return
         busy = true
         lastRagMs = 0; lastRagHits = 0
         NoxLog.i("OREILLE", "Message vocal envoyé à Gemma : ${durationMs} ms d'audio en ${wavs.size} clip(s), ${wavs.sumOf { it.size } / 1024} Ko")
-        worker.execute { submitNow(msg, approxChars, TranscriptExtractor(), history, l, "voix") }
+        worker.execute {
+            // RAG par la voix : la question parlée cherche directement dans la bibliothèque
+            val ragClock = NoxLog.chrono()
+            val hits = try {
+                if (prefs.ragAuto && library.audioSemantic && wavs.isNotEmpty())
+                    library.searchAudio(wavs.first(), k = 3, excludeChatsAfter = skills.conversationStart) else emptyList()
+            } catch (t: Throwable) { NoxLog.e("RAG", "Recherche vocale", t); emptyList() }
+            lastRagMs = ragClock.ms(); lastRagHits = hits.size
+            val ctxBlock = library.contextBlock(hits)
+            if (hits.isNotEmpty()) {
+                NoxLog.i("RAG", "Injection vocale ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
+                val titles = hits.map { it.chunk.title }; post { l.onContext(titles) }
+            }
+            val parts = ArrayList<Content>()
+            wavs.forEach { parts += Content.AudioBytes(it) }
+            parts += Content.Text(if (ctxBlock.isEmpty()) AUDIO_INSTRUCTION else ctxBlock + "\n" + AUDIO_INSTRUCTION)
+            val msg = Message.user(Contents.of(parts))
+            // estimation prudente du coût de l'audio dans le contexte
+            val approxChars = ((durationMs / 1000.0) * AUDIO_TOKENS_PER_S * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length + ctxBlock.length
+            submitNow(msg, approxChars, TranscriptExtractor(), history, l, "voix")
+        }
     }
 
     /** Toujours appelé sur le fil du modèle. */

@@ -1,6 +1,5 @@
 package com.application.nox
 
-import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -82,7 +81,7 @@ class JournalDialog(private val a: MainActivity) {
             setHorizontallyScrolling(false)
         }
         scroll = ScrollView(a).apply {
-            background = Ui.rounded(0xFF0B0B14.toInt(), a.dp(12).toFloat(), Ui.STROKE, a.dp(1))
+            background = Ui.rounded(0xFF1E1D25.toInt(), a.dp(12).toFloat(), 0x22FFFFFF, a.dp(1))
             addView(view)
         }
         body.addView(scroll, LinearLayout.LayoutParams(-1, (a.resources.displayMetrics.heightPixels * 0.55).toInt()).apply { topMargin = a.dp(8) })
@@ -106,7 +105,7 @@ class JournalDialog(private val a: MainActivity) {
         }
         body.addView(sw)
 
-        val d = AlertDialog.Builder(a)
+        val d = NoxDialog.sheet(a)
             .setTitle("Journal de bord")
             .setView(body)
             .setPositiveButton("Fermer", null)
@@ -126,7 +125,7 @@ class JournalDialog(private val a: MainActivity) {
 
     private fun render() {
         chips.forEach { (f, c) ->
-            c.background = Ui.rounded(if (f == filter) Ui.ACCENT else Ui.SURFACE, a.dp(14).toFloat())
+            c.background = Ui.rounded(if (f == filter) Ui.ACCENT else Ui.CARD, a.dp(14).toFloat())
             c.setTextColor(if (f == filter) 0xFFFFFFFF.toInt() else Ui.TEXT)
         }
         summary.text = "⏱ " + NoxLog.summary()
@@ -162,7 +161,7 @@ class JournalDialog(private val a: MainActivity) {
 
 object HelpDialog {
     fun show(a: MainActivity) {
-        val b = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(22), 0, a.dp(22), a.dp(12)) }
+        val b = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, 0, 0, a.dp(12)) }
         fun sec(t: String) = b.addView(a.sectionTitle(t))
         fun item(title: String, desc: String) {
             b.addView(a.text(title, 14.5f, Ui.TEXT, bold = true).apply { setPadding(0, a.dp(6), 0, 0) })
@@ -170,35 +169,39 @@ object HelpDialog {
         }
 
         sec("Parler à Nox")
-        item("Toucher l'orbe", "Nox t'écoute. Touche encore quand tu as fini (sinon il détecte la fin tout seul). Pendant qu'il parle ou réfléchit : l'interrompre et reprendre la parole.")
-        item("Appui long sur l'orbe", "Mode mains libres : Nox réécoute après chaque réponse, l'écran reste allumé.")
-        item("Écrire", "Zone de texte en bas, ➤ pour envoyer. 🎙 lance l'écoute, ■ arrête la réponse.")
-        item("Photo ＋", "Joins une photo puis pose ta question : « qu'est-ce que c'est ? », « lis ce document »…")
-        item("Sous chaque message", "⧉ copier et ▶ relire en un tap. Les relances proposées par Nox s'envoient d'un tap.")
-        item("Parler longtemps", "Nox attend ton silence (réglable : 1,2 à 5 s) et accepte jusqu'à 3 minutes de parole d'affilée. Le compteur s'affiche sous l'orbe.")
+        item("Le micro, en bas à droite", "Ouvre la page vocale : le grand neurone devient vert, Nox t'écoute. Touche le neurone quand tu as fini (sinon il détecte ton silence). Pendant qu'il parle ou réfléchit, toucher le neurone l'interrompt.")
+        item("Bouton power", "Appui long sur le bouton marche/arrêt, de n'importe où (même écran verrouillé) : Nox s'ouvre directement à l'écoute. À activer une fois dans Menu › Autorisations › Bouton power.")
+        item("Appui long sur le neurone", "Mode mains libres : Nox réécoute après chaque réponse, l'écran reste allumé.")
+        item("Écrire", "« ou écris ici… » en bas : la flèche envoie, le carré arrête la réponse.")
+        item("Photo et galerie", "L'appareil photo ou une image de la galerie, puis ta question : « qu'est-ce que c'est ? », « lis ce document »…")
+        item("Sous chaque message", "Copier, relire à voix haute, ou modifier ce que tu as dit. Les relances bleues s'envoient d'un toucher.")
+        item("Couper la voix", "Le bouton haut-parleur en haut à droite : Nox répond par écrit seulement.")
+
+        sec("Piloter le téléphone")
+        item("Toutes les applis", "Avec l'accès « Pilotage des applis », Nox lit l'écran et agit : « Ouvre WhatsApp et écris à Marie que j'arrive », « Dans les réglages, active le mode avion ». Il relit l'écran après chaque geste et te demande confirmation avant d'envoyer, payer ou supprimer.")
+        item("Notifications", "Avec l'accès « Lire les notifications » : « Qu'est-ce que j'ai reçu ? », « Réponds à Paul : OK pour 18h », « Efface les notifications ».")
+        item("Agenda", "« Qu'est-ce que j'ai demain ? » · « Ajoute dentiste jeudi à 15h ».")
+        item("En arrière-plan", "Nox reste chargé (notification discrète « Nox est prêt ») : la réponse au bouton power est immédiate. « Quitter » dans la notification ou « Fermer l'app » dans le menu le libère.")
 
         sec("Exemples de demandes")
-        item("Actions", "« Mets un minuteur de 10 minutes » · « Réveille-moi à 6h30 » · « Rappelle-moi dans 20 minutes de sortir le linge » · « Allume la lampe » · « Ouvre Deezer » · « Mets du Stromae » · « Morceau suivant »")
+        item("Actions", "« Mets un minuteur de 10 minutes » · « Réveille-moi à 6h30 » · « Rappelle-moi dans 20 minutes de sortir le linge » · « Allume la lampe » · « Mets du Stromae » · « Morceau suivant »")
         item("Contacts & trajets", "« Appelle Marie » · « Envoie un SMS à Paul pour dire que j'arrive » · « Emmène-moi à la gare de Pau »")
         item("Listes & mémoire", "« Ajoute du pain et du lait aux courses » · « Qu'est-ce qu'il y a sur ma liste ? » · « Retiens que je suis allergique aux noix » · « Oublie ça »")
-        item("Bibliothèque", "Ajoute tes documents dans ⚡ ou partage un texte vers Nox, puis : « Qu'est-ce que disait le compte rendu sur… ? » · « De quoi on avait parlé la semaine dernière ? »")
-        item("Calculs", "« Combien font 18 % de 2450 ? » : Nox utilise une vraie calculatrice, sans erreur.")
-        item("Connaissances (Freekipedia)", "Crée des fiches dans Freekipedia, exporte la mise à jour (.db), puis ⋮ › Importer Freekipedia. Nox y cherche tout seul pour les questions de connaissances, et montre « Dans ta bibliothèque » ce qu'il a relu.")
+        item("Bibliothèque", "Ajoute tes documents (Menu › Mes documents) ou partage un texte vers Nox, puis : « Qu'est-ce que disait le compte rendu sur… ? ». Avec EmbeddingGemma, même ta question parlée cherche directement dans la bibliothèque.")
+        item("Connaissances (Freekipedia)", "Exporte la mise à jour (.db) depuis Freekipedia, puis Menu › Importer Freekipedia. Nox y cherche tout seul et montre « Dans ta bibliothèque » ce qu'il a relu.")
 
-        sec("Le menu ⋮")
-        item("Nouvelle conversation", "Repart de zéro (la mémoire longue et la bibliothèque restent).")
-        item("Compétences, mémoire & bibliothèque", "Ce que Nox sait faire, ce qu'il a retenu de toi, tes documents.")
-        item("Modèles", "Le cœur (Gemma 4 E2B / E4B) et la mémoire sémantique (EmbeddingGemma 2).")
-        item("Réglages", "Personnalité, voix, écoute, vue, moteur (GPU/CPU, turbo, contexte).")
-        item("Jauges", "RAM, CPU, GPU et batterie en direct. Aussi en balayant depuis le bord droit de l'écran.")
+        sec("L'écran")
+        item("Le neurone en haut à gauche", "Ouvre le menu (favoris, profil, mémoire, documents, modèles, réglages, journal…). Son anneau suit l'état de Nox.")
+        item("Le bouton jauge", "RAM, Nox, CPU, GPU et batterie en direct ; « Détail RAM » et « Journal » en bas du panneau.")
         item("Journal de bord", "Performances (temps avant le 1er mot, vitesse, RAG, outils) et erreurs. Bouton Partager pour me l'envoyer.")
 
         sec("Si ça coince")
         item("Plantage au chargement", "Réglages › Moteur : CPU, contexte 2K, turbo désactivé. Après un plantage GPU, Nox repasse en CPU tout seul.")
         item("Lent avant le 1er mot", "Contexte 2K, couper la vue, et fermer les autres applis. Le journal (filtre Perfs) montre où part le temps.")
-        item("Il ne comprend pas ma voix", "Réglages › Écoute : essaie l'autre mode (oreille Gemma ↔ reconnaissance du téléphone).")
+        item("Il ne comprend pas ma voix", "Réglages › Voix : essaie l'autre mode (oreille Gemma ↔ reconnaissance du téléphone).")
+        item("Pilotage grisé", "Android 13+ : Infos de l'appli › ⋮ › Autoriser les paramètres restreints, puis réactive l'accès.")
 
-        AlertDialog.Builder(a).setTitle("Aide").setView(ScrollView(a).apply { addView(b) }).setPositiveButton("OK", null).show()
+        NoxDialog.sheet(a).setTitle("Aide").setView(ScrollView(a).apply { addView(b) }).setPositiveButton("OK", null).show()
     }
 }
 
@@ -241,6 +244,6 @@ object AboutDialog {
         b.addView(a.sectionTitle("Crédits").apply { layoutParams = LinearLayout.LayoutParams(-1, -2) })
         b.addView(a.text("Gemma 4 et EmbeddingGemma 2 © Google DeepMind (Apache 2.0) · LiteRT-LM © Google (Apache 2.0) · Construit avec Claude.", 12.5f, Ui.MUTED))
 
-        AlertDialog.Builder(a).setTitle("À propos").setView(ScrollView(a).apply { addView(b) }).setPositiveButton("OK", null).show()
+        NoxDialog.Builder(a).setTitle("À propos").setIcon("ⓘ").setView(ScrollView(a).apply { addView(b) }).setPositiveButton("OK", null).show()
     }
 }

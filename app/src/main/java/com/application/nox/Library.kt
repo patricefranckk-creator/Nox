@@ -49,6 +49,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
     @Volatile private var embedder: EmbeddingEngine? = null
     @Volatile var semantic = false; private set
+    /** EmbeddingGemma comprend aussi l'audio : la question parlée cherche directement dans la bibliothèque. */
+    @Volatile var audioSemantic = false; private set
     private val embedLock = Any()
 
     init {
@@ -66,19 +68,24 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             if (embedder != null) return@execute
             val f = store.embedFile() ?: return@execute
             val c = NoxLog.chrono()
-            try {
-                val e = EmbeddingEngine(
-                    EmbeddingEngineConfig(
-                        modelPath = f.absolutePath,
-                        backend = Backend.CPU(threadCount = 2),   // 2 cœurs : le cerveau principal garde les autres
-                        cacheDir = File(ctx.cacheDir, "litert").apply { mkdirs() }.absolutePath,
-                        maxInputLength = 512,
-                    )
+            fun build(audio: Boolean) = EmbeddingEngine(
+                EmbeddingEngineConfig(
+                    modelPath = f.absolutePath,
+                    backend = Backend.CPU(threadCount = 2),   // 2 cœurs : le cerveau principal garde les autres
+                    audioBackend = if (audio) Backend.CPU(threadCount = 2) else null,
+                    cacheDir = File(ctx.cacheDir, "litert").apply { mkdirs() }.absolutePath,
+                    maxInputLength = 512,
                 )
-                e.initialize()
+            ).also { it.initialize() }
+            try {
+                val e = try { build(audio = true).also { audioSemantic = true } } catch (t: Throwable) {
+                    NoxLog.w("RAG", "EmbeddingGemma sans encodeur audio : recherche vocale par le texte seulement", t)
+                    audioSemantic = false
+                    build(audio = false)
+                }
                 embedder = e
                 semantic = true
-                NoxLog.p("RAG", "EmbeddingGemma 2 prêt en ${c.ms()} ms · ${NoxLog.memSnapshot()}")
+                NoxLog.p("RAG", "EmbeddingGemma 2 prêt en ${c.ms()} ms (audio ${if (audioSemantic) "oui" else "non"}) · ${NoxLog.memSnapshot()}")
                 embedPending()
             } catch (t: Throwable) {
                 NoxLog.e("RAG", "EmbeddingGemma indisponible, recherche par mots-clés seulement", t)
@@ -91,6 +98,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         worker.execute {
             synchronized(embedLock) { try { embedder?.close() } catch (_: Throwable) {} ; embedder = null }
             semantic = false
+            audioSemantic = false
         }
     }
 
@@ -345,6 +353,45 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         }.take(k)
     }
 
+    /**
+     * Recherche à partir de la voix elle-même (EmbeddingGemma audio) : les 10 premières secondes
+     * de la question sont comparées par le sens aux extraits de la bibliothèque.
+     */
+    fun searchAudio(wav: ByteArray, k: Int = 3, excludeChatsAfter: Long = Long.MAX_VALUE): List<Hit> {
+        val e = embedder ?: return emptyList()
+        if (!audioSemantic) return emptyList()
+        val clock = NoxLog.chrono()
+        val qv = try {
+            synchronized(embedLock) { normalize(e.computeEmbedding(listOf(InputData.Audio(firstSeconds(wav, 10))), EmbeddingOptions(normalize = true)).embedding) }
+        } catch (t: Throwable) {
+            NoxLog.w("RAG", "Vectorisation de la voix impossible : recherche vocale coupée", t)
+            audioSemantic = false
+            return emptyList()
+        }
+        val pool = synchronized(lock) { chunks.filter { it.vec != null && !(it.source.startsWith("chat:") && it.time >= excludeChatsAfter) } }
+        val scored = pool.mapNotNull { c ->
+            val v = c.vec!!
+            if (v.size != qv.size) return@mapNotNull null
+            var dot = 0.0
+            for (i in v.indices) dot += v[i] * qv[i]
+            c to dot
+        }.sortedByDescending { it.second }
+        NoxLog.p("RAG", "Recherche vocale en ${clock.ms()} ms · meilleurs scores " +
+            scored.take(3).joinToString(" | ") { String.format(Locale.ROOT, "%.2f %s", it.second, it.first.title.take(24)) })
+        return scored.filter { it.second >= COS_AUDIO }.take(k).map { (c, sc) -> Hit(c, sc, String.format(Locale.ROOT, "voix %.2f", sc)) }
+    }
+
+    /** Coupe un WAV PCM 16 bits mono 16 kHz (en-tête 44 octets) à ses premières secondes. */
+    private fun firstSeconds(wav: ByteArray, seconds: Int): ByteArray {
+        val max = 44 + seconds * 32_000
+        if (wav.size <= max || wav.size < 44) return wav
+        val out = wav.copyOf(max)
+        val data = max - 44
+        fun le(pos: Int, v: Int) { out[pos] = v.toByte(); out[pos + 1] = (v shr 8).toByte(); out[pos + 2] = (v shr 16).toByte(); out[pos + 3] = (v shr 24).toByte() }
+        le(4, 36 + data); le(40, data)
+        return out
+    }
+
     /** Bloc de contexte compact à placer devant le message de l'utilisateur. */
     fun contextBlock(hits: List<Hit>, maxChars: Int = 1600): String {
         if (hits.isEmpty()) return ""
@@ -397,6 +444,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         /** Seuils d'injection automatique (prudents : mieux vaut rien qu'un hors-sujet). */
         const val COS_STRONG = 0.55
         const val COS_WEAK = 0.35
+        /** Voix ↔ texte : les scores croisés sont plus bas que texte ↔ texte. */
+        const val COS_AUDIO = 0.30
         const val BM25_STRONG = 4.0
     }
 

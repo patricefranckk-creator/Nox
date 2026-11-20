@@ -4,9 +4,6 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.BatteryManager
 import android.os.Debug
@@ -14,17 +11,14 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.util.TypedValue
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.application.nox.Ui.dp
-import com.application.nox.Ui.text
 import java.io.File
 import java.util.Locale
 
@@ -113,74 +107,77 @@ class SystemStats(private val ctx: Context) {
     private fun readLong(path: String): Long? = readText(path)?.trim()?.toLongOrNull()
 }
 
-/** Jauge en arc de cercle (240°), couleur selon le niveau. */
-class ArcGauge(ctx: Context, private val label: String) : View(ctx) {
-    private var value = 0f          // 0..100
-    private var shown = 0f
-    private var main = "—"
-    private var sub = ""
-    private var inverted = false    // batterie : bas = rouge
-    private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; color = 0xFF1C2238.toInt() }
-    private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
-    private val big = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.TEXT; textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-    private val small = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.MUTED; textAlign = Paint.Align.CENTER }
-    private val rect = RectF()
-
-    fun set(pct: Float?, mainText: String, subText: String, invert: Boolean = false) {
-        value = (pct ?: 0f).coerceIn(0f, 100f); main = mainText; sub = subText; inverted = invert
-        if (pct == null) value = 0f
-        invalidate()
-    }
-
-    override fun onMeasure(w: Int, h: Int) {
-        val size = MeasureSpec.getSize(w)
-        setMeasuredDimension(size, (size * 0.92f).toInt())
-    }
-
-    override fun onDraw(c: Canvas) {
-        shown += (value - shown) * 0.25f
-        if (kotlin.math.abs(value - shown) > 0.3f) postInvalidateOnAnimation()
-        val w = width.toFloat()
-        val stroke = w * 0.08f
-        track.strokeWidth = stroke; arc.strokeWidth = stroke
-        val pad = stroke / 2 + w * 0.06f
-        rect.set(pad, pad, w - pad, w - pad)
-        c.drawArc(rect, 150f, 240f, false, track)
-        val level = if (inverted) 100 - shown else shown
-        arc.color = when { level < 60 -> 0xFF5FE3B0.toInt(); level < 85 -> 0xFFFFC266.toInt(); else -> 0xFFFF6B81.toInt() }
-        c.drawArc(rect, 150f, 240f * shown / 100f, false, arc)
-        big.textSize = w * 0.17f
-        small.textSize = w * 0.085f
-        c.drawText(main, w / 2, w * 0.52f, big)
-        c.drawText(label, w / 2, w * 0.66f, small)
-        small.textSize = w * 0.075f
-        c.drawText(sub, w / 2, w * 0.88f, small)
-    }
-}
-
 /**
- * Le tiroir des jauges : glisse depuis la droite (geste depuis le bord droit, ou ⋮ › Jauges).
- * Mesures rafraîchies chaque seconde, uniquement quand il est ouvert.
+ * Le panneau des jauges, façon Lia : il descend sous l'en-tête quand on touche le bouton jauge.
+ * Cartes à barre (RAM, Nox, CPU, GPU, batterie), rafraîchies chaque seconde tant qu'il est ouvert.
  */
-class GaugeDrawer(private val a: MainActivity, private val root: FrameLayout) {
+class GaugePanel(private val a: MainActivity, private val root: FrameLayout, private val topOffset: () -> Int) {
+
+    private class Card(ctx: Context, title: String) {
+        val view = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(Ui.CARD, ctx.dp(18).toFloat())
+            setPadding(ctx.dp(16), ctx.dp(12), ctx.dp(16), ctx.dp(12))
+        }
+        private val value = TextView(ctx).apply { setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f); typeface = Ui.BLACK }
+        private val fill = View(ctx)
+        private val rest = View(ctx)
+        private val sub = TextView(ctx).apply { setTextColor(0xFFB9BDC8.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Ui.BOLD }
+
+        init {
+            val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+            head.addView(TextView(ctx).apply { text = title; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f); typeface = Ui.BLACK },
+                LinearLayout.LayoutParams(0, -2, 1f))
+            head.addView(value)
+            view.addView(head)
+            val bar = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+            bar.addView(fill, LinearLayout.LayoutParams(0, ctx.dp(8), 50f))
+            bar.addView(rest, LinearLayout.LayoutParams(0, ctx.dp(8), 50f).apply { marginStart = ctx.dp(6) })
+            view.addView(bar, LinearLayout.LayoutParams(-1, ctx.dp(8)).apply { topMargin = ctx.dp(8) })
+            view.addView(sub, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ctx.dp(6) })
+        }
+
+        fun set(pct: Float?, valueText: String, color: Int, subText: String) {
+            val p = (pct ?: 0f).coerceIn(0f, 100f)
+            value.text = valueText
+            value.setTextColor(if (pct == null) Ui.MUTED else color)
+            val r = view.context.dp(4).toFloat()
+            fill.background = Ui.rounded(if (pct == null) 0xFF4A4F5C.toInt() else color, r)
+            rest.background = Ui.rounded(dim(color), r)
+            (fill.layoutParams as LinearLayout.LayoutParams).weight = p.coerceAtLeast(1f)
+            (rest.layoutParams as LinearLayout.LayoutParams).weight = (100f - p).coerceAtLeast(1f)
+            fill.requestLayout()
+            sub.text = subText
+            sub.visibility = if (subText.isEmpty()) View.GONE else View.VISIBLE
+        }
+
+        /** Le même ton, assombri sur le gris du panneau (barre de fond). */
+        private fun dim(c: Int): Int {
+            val r = (c shr 16 and 0xFF) * 3 / 10 + 0x2A * 7 / 10
+            val g = (c shr 8 and 0xFF) * 3 / 10 + 0x2E * 7 / 10
+            val b = (c and 0xFF) * 3 / 10 + 0x38 * 7 / 10
+            return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+    }
 
     private val stats = SystemStats(a)
     private val handler = Handler(Looper.getMainLooper())
-    private val scrim = View(a).apply { setBackgroundColor(0x99000000.toInt()); alpha = 0f; visibility = View.GONE }
+    private val scrim = View(a).apply { visibility = View.GONE; isClickable = true }
     private val panel = LinearLayout(a).apply {
         orientation = LinearLayout.VERTICAL
-        setBackgroundColor(0xFF0B1022.toInt())
-        setPadding(a.dp(16), a.dp(20), a.dp(16), a.dp(16))
-        elevation = a.dp(12).toFloat()
+        background = Ui.rounded(Ui.SHEET, a.dp(24).toFloat())
+        setPadding(a.dp(12), a.dp(12), a.dp(12), a.dp(14))
+        elevation = a.dp(16).toFloat()
+        visibility = View.GONE
         isClickable = true
     }
-    private val ram = ArcGauge(a, "RAM")
-    private val cpu = ArcGauge(a, "CPU · Nox")
-    private val gpu = ArcGauge(a, "GPU Adreno")
-    private val bat = ArcGauge(a, "Batterie")
-    private val details = a.text("", 12f, Ui.MUTED)
-    private val width get() = (a.resources.displayMetrics.widthPixels * 0.86f).toInt()
+    private val ram = Card(a, "RAM tél")
+    private val nox = Card(a, "Nox")
+    private val cpu = Card(a, "CPU Nox")
+    private val gpu = Card(a, "GPU")
+    private val bat = Card(a, "Batterie")
     var isOpen = false; private set
+    var onChange: ((Boolean) -> Unit)? = null
     private val backCb = android.window.OnBackInvokedCallback { close() }
 
     private val tick = object : Runnable {
@@ -192,63 +189,45 @@ class GaugeDrawer(private val a: MainActivity, private val root: FrameLayout) {
     }
 
     init {
-        panel.addView(a.text("Jauges", 20f, Ui.TEXT, bold = true))
-        panel.addView(a.text("En direct, rafraîchi chaque seconde", 12f, Ui.MUTED).apply { setPadding(0, 0, 0, a.dp(10)) })
-        val grid = GridLayout(a).apply { columnCount = 2 }
-        listOf(ram, cpu, gpu, bat).forEach { g ->
-            grid.addView(g, GridLayout.LayoutParams().apply {
-                width = 0; height = ViewGroup.LayoutParams.WRAP_CONTENT
-                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                setMargins(a.dp(4), a.dp(4), a.dp(4), a.dp(4))
-            })
+        val cards = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        listOf(ram, nox, cpu, gpu, bat).forEachIndexed { i, c ->
+            cards.addView(c.view, LinearLayout.LayoutParams(-1, -2).apply { if (i > 0) topMargin = a.dp(9) })
         }
-        panel.addView(grid)
-        panel.addView(ScrollView(a).apply {
-            addView(details.apply { typeface = Typeface.MONOSPACE; setPadding(a.dp(4), a.dp(10), a.dp(4), 0) })
-        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        val links = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; setPadding(a.dp(6), a.dp(12), a.dp(6), 0) }
+        links.addView(link("Détail RAM ›") { close(); details() }, LinearLayout.LayoutParams(0, -2, 1f))
+        links.addView(link("Journal ›") { close(); JournalDialog(a).show() })
+        cards.addView(links)
+        panel.addView(ScrollView(a).apply { isVerticalScrollBarEnabled = false; addView(cards) })
 
         root.addView(scrim, FrameLayout.LayoutParams(-1, -1))
-        root.addView(panel, FrameLayout.LayoutParams(width, -1, Gravity.END))
-        panel.translationX = width.toFloat()
-        panel.visibility = View.GONE
+        root.addView(panel, FrameLayout.LayoutParams((a.resources.displayMetrics.widthPixels * 0.9f).toInt(), -2, Gravity.TOP or Gravity.START))
         scrim.setOnClickListener { close() }
-
-        // Geste : balayer depuis le bord droit de l'écran ouvre le tiroir ; vers la droite le referme
-        var downX = 0f
-        panel.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX; true }
-                MotionEvent.ACTION_UP -> { if (e.rawX - downX > a.dp(60)) close(); true }
-                else -> true
-            }
-        }
     }
 
-    /** À appeler depuis dispatchTouchEvent de l'activité. */
-    private var edgeStartX = -1f
-    fun onTouch(e: MotionEvent): Boolean {
-        if (isOpen) return false
-        val screenW = a.resources.displayMetrics.widthPixels
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> edgeStartX = if (e.rawX > screenW - a.dp(22)) e.rawX else -1f
-            MotionEvent.ACTION_MOVE -> if (edgeStartX > 0 && edgeStartX - e.rawX > a.dp(50)) { edgeStartX = -1f; open(); return true }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> edgeStartX = -1f
-        }
-        return false
+    private fun link(t: String, onClick: () -> Unit) = TextView(a).apply {
+        text = t; setTextColor(Ui.LAVENDER); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); typeface = Ui.BLACK
+        setPadding(0, a.dp(6), 0, a.dp(6))
+        setOnClickListener { onClick() }
     }
+
+    fun toggle() = if (isOpen) close() else open()
 
     fun open() {
         if (isOpen) return
         isOpen = true
         stats.sample()          // amorce la mesure CPU
-        scrim.visibility = View.VISIBLE; panel.visibility = View.VISIBLE
-        scrim.animate().alpha(1f).setDuration(220).start()
-        panel.animate().translationX(0f).setDuration(260).start()
+        (panel.layoutParams as FrameLayout.LayoutParams).topMargin = topOffset()
+        panel.requestLayout()
+        scrim.visibility = View.VISIBLE
+        panel.visibility = View.VISIBLE
+        panel.alpha = 0f; panel.translationY = -a.dp(16).toFloat()
+        panel.animate().alpha(1f).translationY(0f).setDuration(200).start()
         refresh()
         handler.postDelayed(tick, 1000)
         if (android.os.Build.VERSION.SDK_INT >= 33)
             a.onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCb)
-        NoxLog.d("APP", "Tiroir des jauges ouvert")
+        onChange?.invoke(true)
+        NoxLog.d("APP", "Panneau des jauges ouvert")
     }
 
     fun close() {
@@ -256,20 +235,32 @@ class GaugeDrawer(private val a: MainActivity, private val root: FrameLayout) {
         isOpen = false
         handler.removeCallbacks(tick)
         if (android.os.Build.VERSION.SDK_INT >= 33) a.onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCb)
-        scrim.animate().alpha(0f).setDuration(200).withEndAction { scrim.visibility = View.GONE }.start()
-        panel.animate().translationX(width.toFloat()).setDuration(220).withEndAction { panel.visibility = View.GONE }.start()
+        scrim.visibility = View.GONE
+        panel.animate().alpha(0f).translationY(-a.dp(12).toFloat()).setDuration(160).withEndAction { panel.visibility = View.GONE }.start()
+        onChange?.invoke(false)
     }
 
     private fun refresh() {
         val s = stats.sample()
-        ram.set(s.ramUsedPct, "${s.ramUsedPct.toInt()} %", "Nox ${NoxLog.gb(s.noxRss)}")
-        cpu.set(s.noxCpuPct, "${s.noxCpuPct.toInt()} %", "puce à ${s.cpuFreqPct.toInt()} %")
-        if (s.gpuPct != null) gpu.set(s.gpuPct, "${s.gpuPct.toInt()} %", s.gpuFreqMhz?.let { "$it MHz" } ?: "")
-        else gpu.set(null, "n/d", if (a.engine.backendLabel.startsWith("GPU")) "actif (non mesurable)" else "inactif")
-        bat.set(s.battPct.toFloat(), "${s.battPct} %", String.format(Locale.FRANCE, "%.1f °C", s.battTempC), invert = true)
+        val e = Nox.engine
+        ram.set(s.ramUsedPct, "${s.ramUsedPct.toInt()} %", level(s.ramUsedPct, 75f, 88f), "${NoxLog.gb(s.ramAvail)} libres")
+        nox.set(s.noxRss * 100f / s.ramTotal, NoxLog.gb(s.noxRss), Ui.ACCENT, "sur ${NoxLog.gb(s.ramTotal)} · dont modèle ${NoxLog.gb(s.nativeHeap)}")
+        cpu.set(s.noxCpuPct, "${s.noxCpuPct.toInt()} %", level(s.noxCpuPct, 60f, 85f),
+            "${Runtime.getRuntime().availableProcessors()} cœurs · puce à ${s.cpuFreqPct.toInt()} %")
+        if (s.gpuPct != null) gpu.set(s.gpuPct, "${s.gpuPct.toInt()} %", 0xFF5FD39A.toInt(), "Adreno" + (s.gpuFreqMhz?.let { " · $it MHz" } ?: ""))
+        else gpu.set(null, "—", 0xFF5FD39A.toInt(), if (e.backendLabel.startsWith("GPU")) "Adreno actif · mesure bloquée par le téléphone" else "inactif (Nox tourne sur CPU)")
+        val batColor = when { s.battPct <= 15 -> Ui.DANGER; s.battPct <= 30 -> Ui.AMBER; else -> Ui.GREEN }
+        bat.set(s.battPct.toFloat(), String.format(Locale.FRANCE, "%d %% · %.0f °C", s.battPct, s.battTempC), batColor,
+            (if (s.charging) "en charge" else "sur batterie") + " · ${s.battMa} mA · ${s.thermal}")
+    }
 
-        val e = a.engine
-        details.text = buildString {
+    private fun level(v: Float, warn: Float, bad: Float) = when { v >= bad -> Ui.DANGER; v >= warn -> Ui.AMBER; else -> Ui.GREEN }
+
+    /** Popup détaillée : mémoire, processeur, énergie, cerveau, bibliothèque. */
+    private fun details() {
+        val s = stats.sample()
+        val e = Nox.engine
+        val txt = buildString {
             append("MÉMOIRE\n")
             append("  RAM totale ${NoxLog.gb(s.ramTotal)} · libre ${NoxLog.gb(s.ramAvail)}\n")
             append("  Nox ${NoxLog.gb(s.noxRss)} (dont modèle/moteur ${NoxLog.gb(s.nativeHeap)})\n\n")
@@ -283,7 +274,12 @@ class GaugeDrawer(private val a: MainActivity, private val root: FrameLayout) {
             append("  ${if (e.ready) "${e.modelLabel} · ${e.backendLabel}" else "non chargé"}${if (e.busy) " · en train d'écrire" else ""}\n")
             append("  Contexte occupé ${e.contextPct()} %\n")
             append("  ${NoxLog.summary()}\n\n")
-            append("BIBLIOTHÈQUE\n  ${a.library.stats()}")
+            append("BIBLIOTHÈQUE\n  ${Nox.library.stats()}")
         }
+        val tv = TextView(a).apply {
+            text = txt; setTextColor(0xFFC9CCD6.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f); typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+        }
+        NoxDialog.Builder(a).setTitle("Détail").setIcon("📊").setView(tv).setPositiveButton("Fermer", null).show()
     }
 }

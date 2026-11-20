@@ -36,7 +36,7 @@ import java.util.Locale
 /**
  * Les compétences de Nox : de vrais outils appelés par Gemma (function calling), 100 % locaux.
  * Peu d'outils mais polyvalents (paramètre « action ») : moins de texte à pré-calculer au démarrage,
- * et un petit modèle choisit mieux parmi 14 outils clairs que parmi 30.
+ * et un petit modèle choisit mieux parmi 16 outils clairs que parmi 30.
  */
 class Skills(private val ctx: Context, private val library: Library) {
 
@@ -262,24 +262,78 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("agenda", "Agenda", "Prépare un événement dans l'agenda (l'utilisateur valide à l'écran).",
-            obj("titre" to str("titre"), "date" to str("date AAAA-MM-JJ"), "heure" to str("heure HH:MM, vide si toute la journée"),
-                "duree_minutes" to int("durée, 60 par défaut"), required = listOf("titre", "date"))) { p ->
-            val cal = Calendar.getInstance()
-            cal.time = SimpleDateFormat("yyyy-MM-dd", Locale.FRANCE).parse(p.optString("date")) ?: error("date invalide")
-            val time = p.optString("heure")
-            val allDay = time.isBlank()
-            if (!allDay) {
-                val hm = time.split(":", "h").map { it.trim().toIntOrNull() ?: 0 } + listOf(0, 0)
-                cal.set(Calendar.HOUR_OF_DAY, hm[0]); cal.set(Calendar.MINUTE, hm[1])
+        Skill("agenda", "Agenda", "Lit les prochains rendez-vous de l'agenda, ou prépare un nouvel événement (l'utilisateur valide à l'écran).",
+            obj("action" to enum("lire", "ajouter"), "jours" to int("lire : combien de jours à venir, 1 = aujourd'hui"),
+                "titre" to str("titre"), "date" to str("date AAAA-MM-JJ"), "heure" to str("heure HH:MM, vide si toute la journée"),
+                "duree_minutes" to int("durée, 60 par défaut"), required = listOf("action"))) { p ->
+            if (p.optString("action") == "lire") readAgenda(p.optInt("jours", 1).coerceIn(1, 31)) else {
+                val cal = Calendar.getInstance()
+                cal.time = SimpleDateFormat("yyyy-MM-dd", Locale.FRANCE).parse(p.optString("date")) ?: error("date invalide")
+                val time = p.optString("heure")
+                val allDay = time.isBlank()
+                if (!allDay) {
+                    val hm = time.split(":", "h").map { it.trim().toIntOrNull() ?: 0 } + listOf(0, 0)
+                    cal.set(Calendar.HOUR_OF_DAY, hm[0]); cal.set(Calendar.MINUTE, hm[1])
+                }
+                val start = cal.timeInMillis
+                start(Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
+                    .putExtra(CalendarContract.Events.TITLE, p.optString("titre"))
+                    .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
+                    .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, start + p.optInt("duree_minutes", 60) * 60_000L)
+                    .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, allDay))
+                used("📅 ${p.optString("titre")}"); "L'événement est prêt dans l'agenda, il reste à valider."
             }
-            val start = cal.timeInMillis
-            start(Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
-                .putExtra(CalendarContract.Events.TITLE, p.optString("titre"))
-                .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, start)
-                .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, start + p.optInt("duree_minutes", 60) * 60_000L)
-                .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, allDay))
-            used("📅 ${p.optString("titre")}"); "L'événement est prêt dans l'agenda, il reste à valider."
+        },
+
+        Skill("ecran", "Pilotage des applis", "Pilote l'écran de n'importe quelle appli : lire ce qui s'affiche (éléments numérotés), toucher un bouton par son texte ou son numéro, écrire dans un champ, faire défiler, retour, accueil, applis récentes, volet des notifications, réglages rapides, verrouiller, capture d'écran. Ouvre d'abord l'appli avec « ouvrir », puis « lire » avant d'agir.",
+            obj("action" to enum("lire", "toucher", "appui_long", "ecrire", "defiler_bas", "defiler_haut", "retour", "accueil", "recents", "notifications", "reglages_rapides", "verrouiller", "capture"),
+                "cible" to str("texte du bouton ou du champ visé"), "numero" to int("numéro de l'élément donné par « lire »"),
+                "texte" to str("texte à écrire"), "confirme" to bool("true seulement si l'utilisateur a confirmé une action sensible (envoyer, payer, supprimer…)"),
+                required = listOf("action"))) { p ->
+            val acc = NoxAccess.instance
+            if (acc == null) {
+                start(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                used("🖐 accès écran à activer")
+                return@Skill "Le pilotage de l'écran n'est pas activé. J'ai ouvert les réglages d'accessibilité : il faut activer « Nox ». Dis-le à l'utilisateur."
+            }
+            val cible = p.optString("cible").takeIf { it.isNotBlank() }
+            val num = if (p.has("numero")) p.optInt("numero") else null
+            when (val a = p.optString("action")) {
+                "lire" -> { used("👁 lecture de l'écran"); acc.readScreen() }
+                "toucher", "appui_long" -> {
+                    val label = cible ?: acc.labelOf(num) ?: ""
+                    if (Nox.prefs.confirmSensitive && NoxAccess.isSensitive(label) && !p.optBoolean("confirme"))
+                        "Action sensible (« $label ») : demande d'abord à l'utilisateur de confirmer, puis rappelle avec confirme=true."
+                    else { used("👆 $label".trim()); acc.click(cible, num, a == "appui_long") }
+                }
+                "ecrire" -> { used("⌨ saisie"); acc.type(p.optString("texte"), cible, num) }
+                "defiler_bas" -> { used("↓ défilement"); acc.scroll(true) }
+                "defiler_haut" -> { used("↑ défilement"); acc.scroll(false) }
+                else -> { used("🖐 ${a.replace('_', ' ')}"); acc.global(a) }
+            }
+        },
+
+        Skill("notifications", "Notifications", "Lit les notifications reçues (messages, mails, applis), répond directement à un message, ouvre ou efface une notification.",
+            obj("action" to enum("lire", "repondre", "ouvrir", "effacer", "tout_effacer"), "appli" to str("filtrer par appli, ex: WhatsApp"),
+                "numero" to int("numéro donné par « lire »"), "texte" to str("texte de la réponse"), required = listOf("action"))) { p ->
+            val n = NoxNotifs.instance
+            if (n == null) {
+                start(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                used("🔔 accès à activer")
+                return@Skill "L'accès aux notifications n'est pas activé. J'ai ouvert le réglage : il faut autoriser « Nox ». Dis-le à l'utilisateur."
+            }
+            val num = p.optInt("numero", 0)
+            when (p.optString("action")) {
+                "repondre" -> {
+                    val t = p.optString("texte").trim()
+                    require(t.isNotEmpty()) { "texte vide" }
+                    used("💬 réponse"); n.reply(num, t)
+                }
+                "ouvrir" -> { used("🔔 ouverture"); n.open(num) }
+                "effacer" -> { used("🔕 effacée"); n.dismiss(num) }
+                "tout_effacer" -> { used("🔕 tout effacé"); n.dismiss(null) }
+                else -> { used("🔔 lecture"); n.read(p.optString("appli").takeIf { it.isNotBlank() }) }
+            }
         },
 
         Skill("partager", "Partager & copier", "Partage un texte vers une autre appli, le copie dans le presse-papier, ou lance une recherche web dans le navigateur.",
@@ -360,6 +414,33 @@ class Skills(private val ctx: Context, private val library: Library) {
         return best
     }
 
+    private fun readAgenda(days: Int): String {
+        if (ctx.checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
+            main.post { askPermission?.invoke(Manifest.permission.READ_CALENDAR) }
+            return "J'ai besoin d'accéder à l'agenda : accepte la demande qui vient de s'afficher, puis redemande-moi."
+        }
+        val from = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0) }.timeInMillis
+        val to = from + days * 86_400_000L
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            android.content.ContentUris.appendId(it, from); android.content.ContentUris.appendId(it, to)
+        }.build()
+        val fmt = SimpleDateFormat("EEE d MMM HH'h'mm", Locale.FRANCE)
+        val day = SimpleDateFormat("EEE d MMM", Locale.FRANCE)
+        val out = ArrayList<String>()
+        ctx.contentResolver.query(uri, arrayOf(CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.EVENT_LOCATION), null, null,
+            CalendarContract.Instances.BEGIN + " ASC")?.use { c ->
+            while (c.moveToNext() && out.size < 25) {
+                val begin = c.getLong(1)
+                val whenTxt = if (c.getInt(2) == 1) day.format(Date(begin)) + " (journée)" else fmt.format(Date(begin))
+                val loc = c.getString(3)?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
+                out += "$whenTxt : ${c.getString(0) ?: "(sans titre)"}$loc"
+            }
+        }
+        used("📅 agenda")
+        return if (out.isEmpty()) "Rien dans l'agenda sur cette période." else out.joinToString("\n")
+    }
+
     private fun missingContact(who: String): String =
         if (ctx.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
             "J'ai besoin d'accéder aux contacts : accepte la demande qui vient de s'afficher, puis redemande-moi."
@@ -381,6 +462,7 @@ class Skills(private val ctx: Context, private val library: Library) {
     companion object {
         fun str(d: String): JSONObject = JSONObject().put("type", "string").put("description", d)
         fun int(d: String): JSONObject = JSONObject().put("type", "integer").put("description", d)
+        fun bool(d: String): JSONObject = JSONObject().put("type", "boolean").put("description", d)
         fun enum(vararg v: String): JSONObject = JSONObject().put("type", "string").put("enum", JSONArray(v.toList()))
 
         fun obj(vararg props: Pair<String, JSONObject>, required: List<String>? = null): JSONObject {

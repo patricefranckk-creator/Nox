@@ -1,6 +1,5 @@
 package com.application.nox
 
-import android.app.AlertDialog
 import android.content.res.ColorStateList
 import android.view.Gravity
 import android.view.View
@@ -37,7 +36,7 @@ class SettingsDialog(private val a: MainActivity) {
 
         val body = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(a.dp(22), a.dp(4), a.dp(22), a.dp(12))
+            setPadding(0, a.dp(4), 0, a.dp(12))
         }
 
         // ---------------- Toi & Nox
@@ -118,6 +117,15 @@ class SettingsDialog(private val a: MainActivity) {
             a.voiceOut.speakAll("Salut${if (name.text.isNotBlank()) " " + name.text.trim() else ""} ! C'est Nox. Voilà ma voix, ici, sans aucun serveur.")
         }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(8) } })
 
+        // ---------------- Arrière-plan & pilotage
+        body.addView(a.sectionTitle("Arrière-plan & pilotage"))
+        val bg = switch("Garder Nox prêt en arrière-plan (bouton power instantané)", p.background)
+        body.addView(bg)
+        val confirm = switch("Demander confirmation avant d'envoyer, payer ou supprimer dans une appli", p.confirmSensitive)
+        body.addView(confirm)
+        body.addView(a.pillButton("Autorisations…", filled = false) { PermissionsDialog(a).show() }
+            .apply { layoutParams = LinearLayout.LayoutParams(-2, a.dp(44)).apply { topMargin = a.dp(8) } })
+
         // ---------------- Moteur
         body.addView(a.sectionTitle("Moteur (performances)"))
         val backend = radios(listOf("gpu" to "GPU Adreno (rapide)", "cpu" to "CPU (secours)"), p.backend)
@@ -133,7 +141,7 @@ class SettingsDialog(private val a: MainActivity) {
             "Les changements de moteur rechargent le modèle (quelques secondes). Si l'appli se ferme au chargement, passe en CPU ou en contexte 2K.",
             12f, Ui.MUTED).apply { setPadding(0, a.dp(8), 0, 0) })
 
-        AlertDialog.Builder(a)
+        NoxDialog.sheet(a)
             .setTitle("Réglages")
             .setView(ScrollView(a).apply { addView(body) })
             .setNegativeButton("Annuler", null)
@@ -154,6 +162,8 @@ class SettingsDialog(private val a: MainActivity) {
                 p.listenMode = checkedTag(listen) ?: "native"
                 p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
                 p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
+                p.background = bg.isChecked
+                p.confirmSensitive = confirm.isChecked
 
                 val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen || p.vision != oldVision
                 val reconv = changedPrompt || p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
@@ -180,7 +190,7 @@ class SettingsDialog(private val a: MainActivity) {
         textSize = 14.5f
         gravity = Gravity.TOP or Gravity.START
         if (lines > 1) { minLines = 3; maxLines = lines } else isSingleLine = true
-        background = Ui.rounded(Ui.SURFACE, a.dp(14).toFloat(), Ui.STROKE, a.dp(1))
+        background = Ui.rounded(Ui.CARD, a.dp(16).toFloat(), 0x22FFFFFF, a.dp(1))
         setPadding(a.dp(14), a.dp(10), a.dp(14), a.dp(10))
     }
 
@@ -208,6 +218,9 @@ class SettingsDialog(private val a: MainActivity) {
         thumbTintList = ColorStateList(
             arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
             intArrayOf(Ui.ACCENT, 0xFF9A98B0.toInt()))
+        trackTintList = ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(0x884FA6FF.toInt(), 0x55FFFFFF))
     }
 
     private fun radios(options: List<Pair<String, String>>, selected: String) = RadioGroup(a).apply {

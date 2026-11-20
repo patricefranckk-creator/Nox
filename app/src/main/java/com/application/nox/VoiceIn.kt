@@ -17,7 +17,7 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
 
     interface Listener {
         fun onListening()
-        fun onLevel(level: Float)          // 0..1, pour animer l'orbe
+        fun onLevel(level: Float)          // 0..1, pour animer le neurone
         fun onPartial(text: String)
         fun onFinal(text: String)
         fun onNothing()                    // silence / rien compris

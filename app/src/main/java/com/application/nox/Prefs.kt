@@ -109,6 +109,26 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("load_in_progress", false)
         set(v) { sp.edit().putBoolean("load_in_progress", v).commit() }
 
+    /** Nox reste éveillé en arrière-plan (service de premier plan, notification permanente). */
+    var background: Boolean
+        get() = sp.getBoolean("background", true)
+        set(v) = sp.edit().putBoolean("background", v).apply()
+
+    /** Le centre des autorisations a déjà été présenté au premier lancement. */
+    var permsShown: Boolean
+        get() = sp.getBoolean("perms_shown", false)
+        set(v) = sp.edit().putBoolean("perms_shown", v).apply()
+
+    /** Pilotage de l'écran : demander confirmation avant d'envoyer, payer, supprimer… */
+    var confirmSensitive: Boolean
+        get() = sp.getBoolean("confirm_sensitive", true)
+        set(v) = sp.edit().putBoolean("confirm_sensitive", v).apply()
+
+    /** Les trois tuiles « Mes favoris » du menu (identifiants séparés par des virgules). */
+    var favorites: List<String>
+        get() = (sp.getString("favorites", "vocal,bibliotheque,listes") ?: "").split(',').filter { it.isNotBlank() }
+        set(v) = sp.edit().putString("favorites", v.joinToString(",")).apply()
+
     companion object {
         const val DEFAULT_PERSONA =
             "Tu es Nox, l'assistant personnel qui vit dans ce téléphone, sans internet. " +

@@ -1,7 +1,6 @@
 package com.application.nox
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.Intent
 import android.os.Handler
@@ -29,7 +28,7 @@ class ModelsDialog(private val a: MainActivity) {
     private var wasActive = true
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var body: LinearLayout
-    private var dialog: AlertDialog? = null
+    private var dialog: NoxDialog? = null
     private val ticker = object : Runnable {
         override fun run() {
             if (dialog?.isShowing != true) return
@@ -48,7 +47,7 @@ class ModelsDialog(private val a: MainActivity) {
             setPadding(a.dp(22), a.dp(8), a.dp(22), a.dp(8))
         }
         val sv = ScrollView(a).apply { addView(body) }
-        dialog = AlertDialog.Builder(a)
+        dialog = NoxDialog.sheet(a)
             .setTitle("Cerveau de Nox")
             .setView(sv)
             .setPositiveButton("Fermer", null)
@@ -94,7 +93,7 @@ class ModelsDialog(private val a: MainActivity) {
             textSize = 13.5f
             isSingleLine = true
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            background = Ui.rounded(Ui.SURFACE, a.dp(14).toFloat(), Ui.STROKE, a.dp(1))
+            background = Ui.rounded(Ui.CARD, a.dp(14).toFloat(), 0x22FFFFFF, a.dp(1))
             setPadding(a.dp(14), a.dp(10), a.dp(14), a.dp(10))
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, af: Int) {}
@@ -220,7 +219,7 @@ class ModelsDialog(private val a: MainActivity) {
     }
 
     private fun confirmDelete(f: File) {
-        AlertDialog.Builder(a)
+        NoxDialog.Builder(a)
             .setMessage("Supprimer ${f.name} (${ModelStore.human(f.length())}) ?")
             .setPositiveButton("Supprimer") { _, _ ->
                 val wasActive = a.prefs.modelPath == f.absolutePath
@@ -244,8 +243,8 @@ class ModelsDialog(private val a: MainActivity) {
     private fun cardBox(selected: Boolean) = LinearLayout(a).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(a.dp(16), a.dp(14), a.dp(16), a.dp(14))
-        background = Ui.rounded(if (selected) 0xFF1C1940.toInt() else Ui.SURFACE, a.dp(18).toFloat(),
-            if (selected) Ui.ACCENT else Ui.STROKE, a.dp(1))
+        background = Ui.rounded(if (selected) Ui.SURFACE_HI else Ui.CARD, a.dp(18).toFloat(),
+            if (selected) Ui.ACCENT else 0x22FFFFFF, a.dp(1))
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = a.dp(10) }
     }
 
@@ -267,7 +266,7 @@ class ModelsDialog(private val a: MainActivity) {
             val uri = data?.data
             if (resultCode != Activity.RESULT_OK || uri == null) return
             val prog = a.text("Copie du modèle… 0 %", 15f, Ui.TEXT).apply { setPadding(a.dp(24), a.dp(20), a.dp(24), a.dp(10)) }
-            val d = AlertDialog.Builder(a).setTitle("Import").setView(prog).setCancelable(false).show()
+            val d = NoxDialog.Builder(a).setTitle("Import").setView(prog).setCancelable(false).show()
             a.store.import(uri, progress = { p -> prog.text = "Copie du modèle… $p %" }) { file, err ->
                 d.dismiss()
                 if (file == null) { a.toast(err ?: "Échec"); return@import }

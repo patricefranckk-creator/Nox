@@ -2,18 +2,20 @@ package com.application.nox
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -22,82 +24,92 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.application.nox.Ui.dp
-import com.application.nox.Ui.iconButton
 import com.application.nox.Ui.text
 
 class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCapture.Listener {
 
-    lateinit var prefs: Prefs
-    lateinit var store: ModelStore
-    private lateinit var chats: ChatStore
-    lateinit var engine: LlmEngine
+    // Le cœur vit dans Nox (il survit à l'écran) ; l'activité n'en est que la vitrine.
+    val prefs get() = Nox.prefs
+    val store get() = Nox.store
+    val engine get() = Nox.engine
+    val skills get() = Nox.skills
+    val library get() = Nox.library
+    val messages get() = Nox.messages
+    private val chats get() = Nox.chats
+
     lateinit var voiceOut: VoiceOut
-    lateinit var skills: Skills
-    lateinit var library: Library
-    private var pendingImage: ByteArray? = null
-    private lateinit var attachRow: LinearLayout
-    private lateinit var attachLabel: TextView
-    private var embedTried = false
-    lateinit var gauges: GaugeDrawer
+    lateinit var gauges: GaugePanel
+    private lateinit var voicePage: VoicePage
     private var voiceIn: VoiceIn? = null
     private var capture: AudioCapture? = null
+    private var pendingImage: ByteArray? = null
+    private var cameraUri: Uri? = null
+    private var embedTried = false
+    private var listenWhenReady = false
 
     /** Une écoute est en cours (reconnaissance Android OU oreille native Gemma). */
     private val listeningNow get() = voiceIn?.active == true || capture?.active == true
 
-    val messages = mutableListOf<ChatMsg>()
     private val main = Handler(Looper.getMainLooper())
 
     // Vues
-    private lateinit var orb: OrbView
-    private lateinit var orbHint: TextView
-    private lateinit var statusChip: TextView
-    private lateinit var transcript: TextView
+    private lateinit var root: FrameLayout
+    private lateinit var header: LinearLayout
+    private lateinit var neuron: NeuronView
+    private lateinit var statusDot: View
+    private lateinit var statusText: TextView
+    private lateinit var gaugeBtn: FrameLayout
+    private lateinit var gaugeIcon: ImageView
+    private lateinit var muteIcon: ImageView
     private lateinit var scroll: ScrollView
     private lateinit var list: LinearLayout
-    private lateinit var input: EditText
-    private lateinit var actionBtn: TextView
     private lateinit var statsLine: TextView
-    private lateinit var orbBox: FrameLayout
+    private lateinit var attachRow: LinearLayout
+    private lateinit var attachLabel: TextView
+    private lateinit var input: EditText
+    private lateinit var actionIcon: ImageView
 
     private var streamingView: TurnView? = null
-    private var streamingMsg: ChatMsg? = null
     private var turnFromVoice = false
-    private var loading = false
+    private var mode = NeuronView.State.OFF
 
     // ================================================================ cycle de vie
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = Prefs(this)
-        NoxLog.init(this, "v${AppInfo.version(this)} (build ${AppInfo.build(this)})")
-        NoxLog.verbose = prefs.verboseLog
-        store = ModelStore(this)
-        chats = ChatStore(this)
-        library = Library(this, store)
-        skills = Skills(this, library)
-        skills.onUsed = { label -> streamingView?.addTool(label) ?: toast(label); scrollToEnd() }
-        skills.askPermission = { perm -> requestPermissions(arrayOf(perm), REQ_PERM) }
-        engine = LlmEngine(this, prefs, store, skills, library)
+        Nox.init(this)
+        Nox.ui = this
         voiceOut = VoiceOut(this, prefs, this)
 
         window.setDecorFitsSystemWindows(false)   // bord à bord partout, on gère les marges nous-mêmes
-        val rootView = buildUi()
-        setContentView(rootView)
-        gauges = GaugeDrawer(this, rootView as FrameLayout)
-        messages.addAll(chats.load())
-        if (messages.isEmpty()) addTurn(ChatMsg(false, welcomeText()), save = false, register = false) else messages.forEach { addTurn(it, save = false, register = false) }
+        root = buildUi()
+        setContentView(root)
+        gauges = GaugePanel(this, root) { header.bottom }
+        gauges.onChange = { open -> styleGaugeButton(open) }
+        voicePage = VoicePage(this, root)
+
+        if (messages.isEmpty()) addTurn(ChatMsg(false, welcomeText()), save = false, register = false)
+        else messages.forEach { addTurn(it, save = false, register = false) }
         scrollToEnd()
 
-        askPermissions()
-        handleShare(intent)
-        bootModel()
+        val fromAssist = intent?.getBooleanExtra(EXTRA_VOICE, false) == true
+        if (savedInstanceState == null && !fromAssist) showSplash()
+
+        when {
+            engine.ready -> onReady()
+            Nox.loading -> setMode(NeuronView.State.OFF, "réveil de Nox…")
+            else -> bootModel()
+        }
+        handleIntent(intent)
         updateKeepScreen()
+        if (!prefs.permsShown) main.postDelayed({ prefs.permsShown = true; PermissionsDialog(this).show() }, if (fromAssist) 0L else 1600L)
+        else askEssentials()
     }
 
     /** Si un téléchargement se termine pendant que Nox dort, on le branche automatiquement. */
@@ -105,7 +117,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         override fun run() {
             store.pruneCustom().forEach { toast("Échec du téléchargement de $it (lien privé ou invalide ?)") }
             if (!embedTried && store.embedFile() != null) { embedTried = true; library.enableSemantic() }
-            if (!engine.ready && !loading && (prefs.modelPath.isBlank() || !java.io.File(prefs.modelPath).exists())) {
+            if (!engine.ready && !Nox.loading && (prefs.modelPath.isBlank() || !java.io.File(prefs.modelPath).exists())) {
                 val ready = store.localModels().firstOrNull()
                 if (ready != null) {
                     prefs.modelPath = ready.absolutePath
@@ -119,8 +131,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     override fun onResume() {
         super.onResume()
+        Nox.ui = this
         main.removeCallbacks(autoPlug)
         main.postDelayed(autoPlug, 3000)
+        PermissionsDialog.current?.refresh()
     }
 
     private fun stopListening() {
@@ -136,79 +150,125 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     override fun onDestroy() {
-        if (loading) prefs.loadInProgress = false   // fermeture normale, pas un plantage
         main.removeCallbacksAndMessages(null)
         voiceIn?.release()
         capture?.cancel()
         voiceOut.release()
-        engine.release()
-        library.release()
+        if (Nox.ui === this) Nox.ui = null
         super.onDestroy()
+        // Sans arrière-plan, quitter l'écran libère vraiment le modèle
+        if (isFinishing && !isChangingConfigurations && !prefs.background) Nox.shutdown()
+    }
+
+    /** « Fermer l'app » du menu : tout s'arrête, modèle compris. */
+    fun closeApp() {
+        finishAndRemoveTask()
+        main.postDelayed({ Nox.shutdown() }, 250)
     }
 
     // ================================================================ interface
 
-    private fun buildUi(): View {
+    private fun buildUi(): FrameLayout {
         val root = FrameLayout(this).apply { setBackgroundColor(Ui.BG) }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
 
-        // Barre haute
-        val top = LinearLayout(this).apply {
+        // ---- En-tête : neurone (menu), nom + état, jauges, voix
+        header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(18), dp(10), dp(12), dp(4))
+            setPadding(dp(14), dp(10), dp(14), dp(8))
         }
-        val titleBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        titleBox.addView(text("Nox", 24f, Ui.TEXT, bold = true).apply { letterSpacing = 0.08f })
-        statusChip = text("hors-ligne · 100 % local", 12f, Ui.MUTED)
-        titleBox.addView(statusChip)
-        top.addView(titleBox, LinearLayout.LayoutParams(0, -2, 1f))
-        top.addView(iconButton("⋮") { v -> openMenu(v) }.also { it.contentDescription = "Menu" })
-        col.addView(top)
-
-        // Orbe
-        orbBox = FrameLayout(this)
-        orb = OrbView(this)
-        orbBox.addView(orb, FrameLayout.LayoutParams(-1, -1))
-        orbHint = text("", 12.5f, Ui.MUTED).apply { gravity = Gravity.CENTER }
-        orbBox.addView(orbHint, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(6) })
-        orb.setOnClickListener { onOrbTap() }
-        orb.setOnLongClickListener { toggleHandsFree(); true }
-        col.addView(orbBox, LinearLayout.LayoutParams(-1, dp(210)))
-
-        transcript = text("", 16f, Ui.CYAN).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(24), 0, dp(24), dp(6))
-            visibility = View.GONE
+        neuron = NeuronView(this, NeuronView.Style.HEADER).apply {
+            badge = true
+            contentDescription = "Menu"
+            setOnClickListener { MenuSheet(this@MainActivity).show() }
+            setOnLongClickListener { openVoicePage(listen = true); true }
         }
-        col.addView(transcript)
+        header.addView(neuron, LinearLayout.LayoutParams(dp(60), dp(60)))
+        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, dp(8), 0) }
+        titles.addView(TextView(this).apply {
+            text = "Nox"; setTextColor(0xFFFFFFFF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f); typeface = Ui.BLACK
+        })
+        val status = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        statusDot = View(this)
+        status.addView(statusDot, LinearLayout.LayoutParams(dp(9), dp(9)).apply { marginEnd = dp(6) })
+        statusText = TextView(this).apply {
+            setTextColor(Ui.MUTED); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        status.addView(statusText)
+        titles.addView(status)
+        header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
 
-        // Conversation
-        scroll = ScrollView(this).apply { isFillViewport = true; overScrollMode = View.OVER_SCROLL_NEVER }
+        gaugeBtn = FrameLayout(this).apply {
+            contentDescription = "Jauges"
+            setOnClickListener { gauges.toggle() }
+        }
+        gaugeIcon = NoxDialog.icon(this, "ic_gauge", Ui.TEXT, 24)
+        gaugeBtn.addView(gaugeIcon, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        gaugeBtn.addView(View(this).apply { background = Ui.rounded(0xFF5FD39A.toInt(), dp(4).toFloat()) },
+            FrameLayout.LayoutParams(dp(8), dp(8), Gravity.TOP or Gravity.END).apply { topMargin = dp(6); marginEnd = dp(6) })
+        header.addView(gaugeBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+        styleGaugeButton(false)
+
+        muteIcon = NoxDialog.icon(this, "ic_volume", Ui.TEXT, 24)
+        val muteBtn = FrameLayout(this).apply {
+            background = Ui.ripple(Ui.rounded(Ui.SURFACE, dp(15).toFloat()))
+            setOnClickListener { toggleMute() }
+            addView(muteIcon, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        }
+        header.addView(muteBtn, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(10) })
+        styleMute()
+        col.addView(header)
+
+        // ---- Le fil : ligne verticale fixe, tours de parole par-dessus
+        scroll = ScrollView(this).apply {
+            isFillViewport = true
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            background = TurnView.Timeline(dp(47).toFloat(), dp(2).toFloat())
+        }
         list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(4), dp(14), dp(8))
+            setPadding(dp(40), dp(4), 0, dp(12))
         }
         scroll.addView(list)
         col.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        statsLine = text("", 11f, Ui.MUTED).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(2)) }
+        statsLine = text("", 11f, Ui.FAINT).apply { gravity = Gravity.CENTER; setPadding(dp(20), 0, dp(20), dp(2)); typeface = Ui.BOLD }
         col.addView(statsLine)
 
-        // Saisie
+        attachRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(58), dp(4), dp(16), dp(2))
+            visibility = View.GONE
+        }
+        attachLabel = text("photo jointe", 13f, Ui.CYAN, bold = true)
+        attachRow.addView(attachLabel, LinearLayout.LayoutParams(0, -2, 1f))
+        attachRow.addView(text("retirer", 13f, Ui.LAVENDER, bold = true).apply {
+            setPadding(dp(10), dp(6), dp(4), dp(6)); setOnClickListener { clearAttachment() }
+        })
+        col.addView(attachRow)
+
+        // ---- Bas : photo, galerie, saisie, micro
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(6), dp(12), dp(10))
+            setPadding(0, dp(6), dp(14), dp(10))
         }
+        bar.addView(View(this).apply { setBackgroundColor(Ui.TIMELINE) }, LinearLayout.LayoutParams(dp(2), dp(46)).apply { marginStart = dp(46); marginEnd = dp(4) })
+        bar.addView(barIcon("ic_camera", "Prendre une photo", 30) { takePhoto() })
+        bar.addView(barIcon("ic_gallery", "Choisir une image", 30) { pickImage() })
         input = EditText(this).apply {
-            hint = "Écris à Nox…"
-            setHintTextColor(Ui.MUTED)
+            hint = "ou écris ici…"
+            setHintTextColor(0xFF6E7891.toInt())
             setTextColor(Ui.TEXT)
-            textSize = 16f
-            background = Ui.rounded(Ui.SURFACE, dp(24).toFloat(), Ui.STROKE, dp(1))
-            setPadding(dp(18), dp(12), dp(18), dp(12))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            typeface = Ui.BOLD
+            background = null
+            setPadding(dp(8), dp(8), dp(8), dp(8))
             maxLines = 5
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_ACTION_SEND
@@ -218,63 +278,79 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 override fun afterTextChanged(s: Editable?) = refreshAction()
             })
         }
-        bar.addView(iconButton("＋", 42) { pickImage() }.also { it.contentDescription = "Joindre une photo" })
-        bar.addView(spacer(8))
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-        bar.addView(spacer(8))
-        actionBtn = iconButton("🎙", 50, Ui.ACCENT, Color.WHITE) { onAction() }
+        val actionBtn = barIcon("ic_mic", "Parler", 28) { onAction() }
+        actionIcon = actionBtn
         bar.addView(actionBtn)
-        attachRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(2), dp(16), 0)
-            visibility = View.GONE
-        }
-        attachLabel = text("📷 photo jointe", 13f, Ui.CYAN)
-        attachRow.addView(attachLabel, LinearLayout.LayoutParams(0, -2, 1f))
-        attachRow.addView(text("✕ retirer", 13f, Ui.MUTED).apply { setPadding(dp(10), dp(6), dp(4), dp(6)); setOnClickListener { clearAttachment() } })
-        col.addView(attachRow)
         col.addView(bar)
+        col.addView(View(this).apply { setBackgroundColor(0xFF2A3346.toInt()) },
+            LinearLayout.LayoutParams(-1, dp(2)).apply { marginStart = dp(6); marginEnd = dp(6); bottomMargin = dp(10) })
 
-        // Bords à bords (Android 15+) : on respecte barres système et clavier
+        // Bord à bord (Android 15+) : on respecte barres système et clavier
         root.setOnApplyWindowInsetsListener { v, insets ->
             val sys = insets.getInsets(WindowInsets.Type.systemBars())
             val ime = insets.getInsets(WindowInsets.Type.ime())
             v.setPadding(sys.left, sys.top, sys.right, maxOf(sys.bottom, ime.bottom))
-            val kb = ime.bottom > 0
-            orbBox.layoutParams = orbBox.layoutParams.apply { height = dp(if (kb) 92 else 210) }
-            if (kb) scrollToEnd()
+            if (ime.bottom > 0) scrollToEnd()
             insets
         }
-        setOrb(OrbView.Mode.OFF, "")
+        setMode(NeuronView.State.OFF, "")
         return root
     }
 
-    /** Menu principal : tout est ici. */
-    private fun openMenu(anchor: View) {
-        val pm = android.widget.PopupMenu(this, anchor, Gravity.END)
-        val items = listOf(
-            "✦  Nouvelle conversation" to { newConversation() },
-            "⚡  Compétences, mémoire & bibliothèque" to { SkillsDialog(this).show() },
-            "📥  Importer Freekipedia" to { SkillsDialog.pickFreekipedia(this) },
-            "◉  Modèles" to { ModelsDialog(this).show() },
-            "⚙  Réglages" to { SettingsDialog(this).show() },
-            "📊  Jauges (RAM, CPU, GPU, batterie)" to { gauges.open() },
-            "📈  Journal de bord" to { JournalDialog(this).show() },
-            "？ Aide" to { HelpDialog.show(this) },
-            "ⓘ  À propos · v${AppInfo.version(this)}" to { AboutDialog.show(this) },
-        )
-        items.forEachIndexed { i, (label, _) -> pm.menu.add(0, i, i, label) }
-        pm.setOnMenuItemClickListener { mi -> items[mi.itemId].second.invoke(); true }
-        pm.show()
+    private fun barIcon(name: String, desc: String, size: Int, onClick: () -> Unit) = ImageView(this).apply {
+        setImageResource(resources.getIdentifier(name, "drawable", packageName))
+        setColorFilter(Ui.ACCENT)
+        contentDescription = desc
+        val pad = (dp(44) - dp(size)) / 2
+        setPadding(pad, pad, pad, pad)
+        background = Ui.ripple(Ui.rounded(0, dp(22).toFloat()))
+        layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+        setOnClickListener { onClick() }
     }
 
-    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        if (::gauges.isInitialized && gauges.onTouch(ev)) return true
-        return super.dispatchTouchEvent(ev)
+    private fun styleGaugeButton(open: Boolean) {
+        gaugeBtn.background = Ui.ripple(Ui.rounded(if (open) Ui.SURFACE_HI else Ui.SURFACE, dp(15).toFloat()))
+        gaugeIcon.setColorFilter(if (open) Ui.ACCENT else Ui.TEXT)
     }
 
-    private fun spacer(w: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(w), 1) }
+    private fun styleMute() {
+        val on = prefs.autoSpeak
+        muteIcon.setImageResource(resources.getIdentifier(if (on) "ic_volume" else "ic_volume_off", "drawable", packageName))
+        muteIcon.setColorFilter(if (on) Ui.TEXT else 0xFF6E7891.toInt())
+        muteIcon.contentDescription = if (on) "Couper la voix" else "Remettre la voix"
+    }
+
+    private fun toggleMute() {
+        prefs.autoSpeak = !prefs.autoSpeak
+        if (!prefs.autoSpeak) voiceOut.stop()
+        styleMute()
+        toast(if (prefs.autoSpeak) "Nox lit ses réponses à voix haute" else "Voix coupée : Nox répond par écrit")
+    }
+
+    /** Écran de démarrage de Lia : le neurone sur son halo, le nom, la version. */
+    private fun showSplash() {
+        val decor = window.decorView as FrameLayout
+        val splash = FrameLayout(this).apply { setBackgroundColor(0xFF1A1B2E.toInt()); isClickable = true }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        val n = NeuronView(this, NeuronView.Style.SPLASH)
+        col.addView(n, LinearLayout.LayoutParams(dp(170), dp(170)))
+        col.addView(TextView(this).apply {
+            text = "Nox"; setTextColor(0xFFFFFFFF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f); typeface = Ui.BOLD
+            letterSpacing = 0.02f; gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
+        splash.addView(col, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        splash.addView(TextView(this).apply {
+            text = "Version ${AppInfo.version(this@MainActivity)}"
+            setTextColor(0x73FFFFFF); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); gravity = Gravity.CENTER
+        }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(48) })
+        decor.addView(splash, FrameLayout.LayoutParams(-1, -1))
+        n.scaleX = 0.6f; n.scaleY = 0.6f; n.alpha = 0f
+        n.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(650).start()
+        main.postDelayed({
+            splash.animate().alpha(0f).setDuration(320).withEndAction { decor.removeView(splash) }.start()
+        }, 1400)
+    }
 
     private val turnActions = object : TurnView.Actions {
         override fun copy(m: ChatMsg) {
@@ -282,6 +358,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             toast("Copié")
         }
         override fun readAloud(m: ChatMsg) = voiceOut.speakAll(m.text)
+        override fun edit(m: ChatMsg) {
+            input.setText(m.text.removePrefix("📷 "))
+            input.setSelection(input.text.length)
+            input.requestFocus()
+            getSystemService(InputMethodManager::class.java).showSoftInput(input, 0)
+        }
         override fun quickReply(text: String) {
             if (engine.busy) return
             turnFromVoice = false
@@ -299,24 +381,42 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     private fun scrollToEnd() = scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
 
-    private fun setOrb(mode: OrbView.Mode, hint: String) {
-        orb.mode = mode
-        orbHint.text = hint
+    /** Un seul endroit pour l'état : neurone de l'en-tête, page vocale et ligne d'état. */
+    private fun setMode(state: NeuronView.State, hint: String) {
+        mode = state
+        neuron.state = state
+        voicePage.set(state, hint)
+        val (dot, label) = when (state) {
+            NeuronView.State.OFF -> (if (Nox.loading) Ui.AMBER else Ui.FAINT) to (if (Nox.loading) "réveil…" else "endormi")
+            NeuronView.State.IDLE -> 0xFF5FD39A.toInt() to "prêt · ${engine.modelLabel} · ${engine.backendLabel}"
+            NeuronView.State.LISTENING -> 0xFF5FD39A.toInt() to "à l'écoute…"
+            NeuronView.State.THINKING -> Ui.ACCENT to "réfléchit…"
+            NeuronView.State.SPEAKING -> Ui.AMBER to "parle…"
+        }
+        statusDot.background = Ui.rounded(dot, dp(5).toFloat())
+        statusText.text = if (state == NeuronView.State.OFF && hint.isNotBlank()) hint else label
     }
 
     private fun idleHint() = when {
         !engine.ready -> ""
-        prefs.handsFree -> "Mains libres actif · touche l'orbe pour parler"
-        else -> "Touche l'orbe pour parler · appui long : mains libres"
+        prefs.handsFree -> "Mains libres actif · touche le neurone pour parler"
+        else -> "Touche le neurone pour parler · appui long : mains libres"
     }
 
     private fun refreshAction() {
         val generating = engine.busy || voiceOut.speaking
-        actionBtn.text = when {
-            generating -> "■"
-            input.text.isNotBlank() || pendingImage != null -> "➤"
-            else -> "🎙"
+        val (icon, desc) = when {
+            generating -> "ic_stop" to "Arrêter"
+            input.text.isNotBlank() || pendingImage != null -> "ic_send" to "Envoyer"
+            else -> "ic_mic" to "Parler"
         }
+        actionIcon.setImageResource(resources.getIdentifier(icon, "drawable", packageName))
+        actionIcon.contentDescription = desc
+    }
+
+    fun onToolUsed(label: String) {
+        streamingView?.addTool(label) ?: toast(label)
+        scrollToEnd()
     }
 
     // ================================================================ modèle
@@ -327,9 +427,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             val local = store.localModels().firstOrNull()
             if (local != null) prefs.modelPath = local.absolutePath
             else {
-                statusChip.text = "aucun cerveau installé"
-                setOrb(OrbView.Mode.OFF, "Installe un modèle pour réveiller Nox")
-                main.postDelayed({ ModelsDialog(this).show() }, 500)
+                setMode(NeuronView.State.OFF, "aucun cerveau installé")
+                main.postDelayed({ ModelsDialog(this).show() }, 1800)
                 return
             }
         }
@@ -337,8 +436,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     fun loadModel() {
-        if (loading) return
-        loading = true
+        if (Nox.loading) return
+        Nox.loading = true
         // Garde-fou : si le chargement précédent a fait planter l'appli (pilote GPU), on passe en CPU.
         if (prefs.loadInProgress && prefs.backend == "gpu") {
             prefs.backend = "cpu"
@@ -347,23 +446,34 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         }
         prefs.loadInProgress = true
         voiceOut.stop(); stopListening()
-        setOrb(OrbView.Mode.OFF, "Réveil de Nox…")
-        statusChip.text = "chargement du modèle…"
+        setMode(NeuronView.State.OFF, "réveil de Nox…")
         refreshAction()
-        engine.load(messages.toList(), onStatus = { s -> orbHint.text = s }) { ok, msg ->
-            loading = false
+        engine.load(messages.toList(), onStatus = { s -> Nox.ui?.onLoadStatus(s) }) { ok, msg ->
+            Nox.loading = false
             prefs.loadInProgress = false
             if (ok) NoxLog.i("APP", "Nox prêt : $msg") else NoxLog.e("APP", "Chargement raté : $msg")
-            if (ok) {
-                statusChip.text = "$msg · hors-ligne"
-                setOrb(OrbView.Mode.IDLE, idleHint())
-            } else {
-                statusChip.text = "modèle non chargé"
-                setOrb(OrbView.Mode.OFF, msg)
-                toast(msg)
-            }
-            refreshAction()
+            if (ok) NoxService.start(Nox.app, "${engine.modelLabel} · ${engine.backendLabel}")
+            Nox.ui?.onLoaded(ok, msg)
         }
+    }
+
+    private fun onLoadStatus(s: String) {
+        if (mode == NeuronView.State.OFF) { statusText.text = s; voicePage.caption(s) }
+    }
+
+    private fun onLoaded(ok: Boolean, msg: String) {
+        if (ok) onReady() else {
+            setMode(NeuronView.State.OFF, "modèle non chargé")
+            toast(msg)
+        }
+        refreshAction()
+    }
+
+    private fun onReady() {
+        setMode(NeuronView.State.IDLE, idleHint())
+        if (!NoxService.running) NoxService.start(Nox.app, "${engine.modelLabel} · ${engine.backendLabel}")
+        if (listenWhenReady) { listenWhenReady = false; startListening() }
+        refreshAction()
     }
 
     // ================================================================ dialogue
@@ -378,16 +488,37 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 turnFromVoice = false
                 send(t)
             }
-            else -> startListening()
+            else -> openVoicePage(listen = true)
         }
     }
 
-    private fun onOrbTap() {
+    /** Page vocale plein écran ; écoute tout de suite si demandé (micro, bouton power). */
+    fun openVoicePage(listen: Boolean) {
+        gauges.close()
+        voicePage.open()
+        voicePage.set(mode, when {
+            engine.ready -> idleHint()
+            Nox.loading -> "Réveil de Nox… j'écoute dès que je suis prêt"
+            else -> "Aucun modèle chargé"
+        })
+        if (!listen) return
+        if (engine.ready) { if (!engine.busy && !voiceOut.speaking && !listeningNow) startListening() }
+        else listenWhenReady = true
+    }
+
+    fun closeVoicePage() {
+        if (listeningNow) { stopListening(); if (!engine.busy) setMode(NeuronView.State.IDLE, idleHint()) }
+        listenWhenReady = false
+        voicePage.close()
+        scrollToEnd()
+    }
+
+    fun onNeuronTap() {
         when {
-            !engine.ready -> if (!loading) ModelsDialog(this).show()
+            !engine.ready -> if (!Nox.loading) ModelsDialog(this).show()
             engine.busy || voiceOut.speaking -> { interrupt(); startListening() }
             capture?.active == true -> capture?.finish()   // « j'ai fini » : on envoie ce qui a été dit
-            voiceIn?.active == true -> { voiceIn?.stop(); setOrb(OrbView.Mode.IDLE, idleHint()); transcript.visibility = View.GONE }
+            voiceIn?.active == true -> { voiceIn?.stop(); setMode(NeuronView.State.IDLE, idleHint()) }
             else -> startListening()
         }
     }
@@ -395,7 +526,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun interrupt() {
         engine.stop()
         voiceOut.stop()
-        setOrb(OrbView.Mode.IDLE, idleHint())
+        setMode(NeuronView.State.IDLE, idleHint())
         refreshAction()
     }
 
@@ -407,9 +538,9 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     private fun sendAudio(wavs: List<ByteArray>, ms: Long) = runTurn(null, wavs, ms)
 
-    /** Un tour de parole complet : bulle utilisateur → réflexion → réponse en flux (+ voix). */
+    /** Un tour de parole complet : tour utilisateur → réflexion → réponse en flux (+ voix). */
     private fun runTurn(text: String?, wav: List<ByteArray>?, ms: Long, image: ByteArray? = null) {
-        if (!engine.ready) { toast(if (loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
+        if (!engine.ready) { toast(if (Nox.loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
         if (engine.busy) return
         stopListening()
         voiceOut.stop()
@@ -419,16 +550,16 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             image != null -> "📷 " + (text?.ifBlank { "Que vois-tu sur cette photo ?" } ?: "")
             text != null -> text
             else -> "🎙 message vocal (${(ms + 500) / 1000} s)"
-        }).apply { voice = wav != null }
+        }).apply { voice = wav != null || turnFromVoice }
         // les relances de la réponse précédente ne servent plus
         (list.getChildAt(list.childCount - 1) as? TurnView)?.clearSuggestions()
         val userView = addTurn(userMsg)
         val reply = ChatMsg(false, "").apply { voice = prefs.autoSpeak }
         val view = addTurn(reply, save = false)
-        streamingMsg = reply
         streamingView = view
         scrollToEnd()
-        setOrb(OrbView.Mode.THINKING, if (wav != null) "Gemma écoute ta voix…" else "Réflexion…")
+        setMode(NeuronView.State.THINKING, if (wav != null) "Gemma écoute ta voix…" else "Réflexion…")
+        if (text != null) voicePage.heard(text)
         statsLine.text = ""
 
         val speak = prefs.autoSpeak
@@ -436,7 +567,6 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
         val listener = object : LlmEngine.StreamListener {
             override fun onChunk(text: String) {
-                if (orb.mode == OrbView.Mode.THINKING) orbHint.text = "Réflexion…"
                 reply.text += text
                 view.render()
                 if (speak) voiceOut.feed(text)
@@ -448,6 +578,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 userMsg.text = text
                 userView.render()
                 userView.refreshFooter()
+                voicePage.heard(text)
             }
 
             override fun onContext(titles: List<String>) { view.setSources(titles); scrollToEnd() }
@@ -473,11 +604,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     private fun finishTurn(spoken: Boolean) {
-        streamingMsg = null
         streamingView = null
         chats.save(messages)
         if (spoken) voiceOut.endStream()
-        if (!voiceOut.speaking && !listeningNow) setOrb(OrbView.Mode.IDLE, idleHint())
+        if (!voiceOut.speaking && !listeningNow) setMode(NeuronView.State.IDLE, idleHint())
         if (!spoken) maybeRelisten()
         refreshAction()
     }
@@ -502,19 +632,21 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         applyLightSettings()
     }
 
-    /** Réglages qui ne touchent pas au modèle (voix, mains libres). */
+    /** Réglages qui ne touchent pas au modèle (voix, mains libres, arrière-plan). */
     fun applyLightSettings() {
         voiceOut.applyVoice()
-        if (orb.mode == OrbView.Mode.IDLE) orbHint.text = idleHint()
+        styleMute()
+        if (mode == NeuronView.State.IDLE) setMode(NeuronView.State.IDLE, idleHint())
+        if (!prefs.background) NoxService.stop(this) else if (engine.ready && !NoxService.running) NoxService.start(Nox.app, "${engine.modelLabel} · ${engine.backendLabel}")
         updateKeepScreen()
     }
 
-    private fun toggleHandsFree() {
+    fun toggleHandsFree() {
         prefs.handsFree = !prefs.handsFree
         toast(if (prefs.handsFree) "Mains libres activé : Nox réécoute après chaque réponse" else "Mains libres désactivé")
         updateKeepScreen()
-        if (orb.mode == OrbView.Mode.IDLE) orbHint.text = idleHint()
-        if (prefs.handsFree && engine.ready && !engine.busy) startListening()
+        if (mode == NeuronView.State.IDLE) setMode(NeuronView.State.IDLE, idleHint())
+        if (prefs.handsFree && engine.ready && !engine.busy) openVoicePage(listen = true)
     }
 
     private fun updateKeepScreen() {
@@ -531,33 +663,31 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         }
         voiceOut.stop()
         turnFromVoice = true
+        voicePage.heard("")
         if (prefs.listenMode == "native" && engine.audioReady) {
             // Oreille native : le son brut part directement dans Gemma
             if (capture == null) capture = AudioCapture(this)
-            transcript.visibility = View.GONE
-            setOrb(OrbView.Mode.LISTENING, "Je t'écoute…")
+            setMode(NeuronView.State.LISTENING, "Je t'écoute…")
             capture?.start(prefs.patienceMs, prefs.maxListenSec)
             return
         }
         if (voiceIn == null) voiceIn = VoiceIn(this, this)
         voiceIn?.patienceMs = prefs.patienceMs
-        transcript.text = ""
-        transcript.visibility = View.VISIBLE
-        setOrb(OrbView.Mode.LISTENING, "Je t'écoute…")
+        setMode(NeuronView.State.LISTENING, "Je t'écoute…")
         voiceIn?.start()
     }
 
     // ---- oreille native (AudioCapture)
 
-    override fun onCaptureStarted() = setOrb(OrbView.Mode.LISTENING, "Je t'écoute · oreille Gemma (touche quand tu as fini)")
-    override fun onCaptureLevel(level: Float) = orb.setLevel(level)
+    override fun onCaptureStarted() = setMode(NeuronView.State.LISTENING, "Je t'écoute… touche le neurone quand tu as fini")
+    override fun onCaptureLevel(level: Float) { voicePage.setLevel(level); neuron.setLevel(level) }
     override fun onCaptureElapsed(speechMs: Long) {
         val s = speechMs / 1000
-        orbHint.text = String.format(java.util.Locale.FRANCE, "Je t'écoute… %d:%02d · touche quand tu as fini", s / 60, s % 60)
+        voicePage.caption(String.format(java.util.Locale.FRANCE, "Je t'écoute… %d:%02d · touche le neurone quand tu as fini", s / 60, s % 60))
     }
 
     override fun onCaptured(wav: List<ByteArray>, durationMs: Long) {
-        orb.setLevel(0f)
+        voicePage.setLevel(0f)
         turnFromVoice = true
         sendAudio(wav, durationMs)
     }
@@ -565,26 +695,26 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onCaptureError(msg: String) = onVoiceError(msg)
 
     override fun onListening() {
-        setOrb(OrbView.Mode.LISTENING, if (voiceIn?.isOnDevice == true) "Je t'écoute… (reconnaissance locale)" else "Je t'écoute…")
+        setMode(NeuronView.State.LISTENING, if (voiceIn?.isOnDevice == true) "Je t'écoute… (reconnaissance locale)" else "Je t'écoute…")
     }
 
-    override fun onLevel(level: Float) = orb.setLevel(level)
+    override fun onLevel(level: Float) { voicePage.setLevel(level); neuron.setLevel(level) }
 
     override fun onPartial(text: String) {
-        transcript.text = text
+        voicePage.heard(text)
+        if (!voicePage.isOpen) statsLine.text = text
     }
 
     override fun onFinal(text: String) {
-        transcript.visibility = View.GONE
-        orb.setLevel(0f)
+        voicePage.setLevel(0f)
         turnFromVoice = true
         send(text)
     }
 
     override fun onNothing() {
-        transcript.visibility = View.GONE
-        orb.setLevel(0f)
-        if (!engine.busy) setOrb(OrbView.Mode.IDLE, idleHint())
+        voicePage.setLevel(0f)
+        neuron.setLevel(0f)
+        if (!engine.busy) setMode(NeuronView.State.IDLE, idleHint())
     }
 
     override fun onVoiceError(msg: String) {
@@ -595,8 +725,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     // ================================================================ voix — sortie
 
     override fun onSpeakingChanged(speaking: Boolean) {
-        if (speaking) setOrb(OrbView.Mode.SPEAKING, "Nox parle · touche pour l'interrompre")
-        else if (!engine.busy && !listeningNow) setOrb(OrbView.Mode.IDLE, idleHint())
+        if (speaking) setMode(NeuronView.State.SPEAKING, "Nox parle · touche le neurone pour l'interrompre")
+        else if (!engine.busy && !listeningNow) setMode(NeuronView.State.IDLE, idleHint())
         refreshAction()
     }
 
@@ -605,9 +735,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         maybeRelisten()
     }
 
-    // ================================================================ divers
+    // ================================================================ autorisations
 
-    private fun askPermissions() {
+    /** Après le premier lancement, on redemande seulement l'essentiel (micro, notifications). */
+    private fun askEssentials() {
         val need = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) need += Manifest.permission.RECORD_AUDIO
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -619,6 +750,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_MIC && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startListening()
         if (requestCode == REQ_PERM && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) toast("Merci ! Redemande-moi, ça va marcher.")
+        PermissionsDialog.current?.refresh()
     }
 
     @Deprecated("Deprecated in Java")
@@ -626,23 +758,51 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == ModelsDialog.REQ_IMPORT) ModelsDialog.onImportResult(this, resultCode, data)
         if (requestCode == REQ_IMAGE && resultCode == RESULT_OK) data?.data?.let { loadImage(it) }
+        if (requestCode == REQ_CAMERA) {
+            val uri = cameraUri
+            cameraUri = null
+            if (resultCode == RESULT_OK && uri != null) loadImage(uri) else uri?.let { contentResolver.delete(it, null, null) }
+        }
         if (requestCode == SkillsDialog.REQ_DOC && resultCode == RESULT_OK) data?.data?.let { SkillsDialog.importDocument(this, it) }
         if (requestCode == SkillsDialog.REQ_FK && resultCode == RESULT_OK) data?.data?.let { SkillsDialog.importFreekipedia(this, it) }
     }
 
-    // ---- vue 📷
+    // ---- vue : photo et galerie
+
+    private fun visionOk(): Boolean {
+        if (engine.visionReady) return true
+        toast(if (engine.ready) "La vue n'est pas active : il faut Gemma série E et l'option « Vue » dans les réglages" else "Le modèle n'est pas chargé")
+        return false
+    }
 
     private fun pickImage() {
-        if (!engine.visionReady) {
-            toast(if (engine.ready) "La vue n'est pas active : il faut Gemma série E et l'option « Vue » dans les réglages" else "Le modèle n'est pas chargé")
-            return
-        }
+        if (!visionOk()) return
         @Suppress("DEPRECATION")
         startActivityForResult(Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE), REQ_IMAGE)
     }
 
+    /** Appareil photo du téléphone ; la photo est rangée dans Images/Nox (aucune permission caméra). */
+    private fun takePhoto() {
+        if (!visionOk()) return
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "nox_${System.currentTimeMillis()}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Nox")
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: run { toast("Photo impossible"); return }
+        cameraUri = uri
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), REQ_CAMERA)
+        } catch (_: Throwable) {
+            contentResolver.delete(uri, null, null); cameraUri = null
+            toast("Aucune appli photo trouvée")
+        }
+    }
+
     /** Réduit la photo à 768 px max : assez pour Gemma, rapide à encoder. */
-    private fun loadImage(uri: android.net.Uri) {
+    private fun loadImage(uri: Uri) {
         Thread {
             try {
                 val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -672,23 +832,31 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun clearAttachment() {
         pendingImage = null
         attachRow.visibility = View.GONE
+        refreshAction()
     }
 
-    // ---- partage vers Nox (texte depuis une autre appli)
+    // ---- intentions reçues : partage de texte, bouton power, notification « Parler »
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleShare(intent)
+        setIntent(intent)
+        handleIntent(intent)
     }
 
-    private fun handleShare(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_SEND) return
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+        if (intent.getBooleanExtra(EXTRA_VOICE, false)) {
+            intent.removeExtra(EXTRA_VOICE)
+            main.post { openVoicePage(listen = true) }
+            return
+        }
+        if (intent.action != Intent.ACTION_SEND) return
         val txt = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
         if (txt.isEmpty()) return
         val title = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.takeIf { it.isNotBlank() } ?: txt.take(40).replace('\n', ' ')
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Texte reçu (${txt.length} caractères)")
-            .setItems(arrayOf("Ajouter à la bibliothèque de Nox", "En parler avec Nox")) { _, w ->
+        NoxDialog.Builder(this)
+            .setTitle("Texte reçu (${txt.length} caractères)").setIcon("📥")
+            .setItems(arrayOf("📚  Ajouter à la bibliothèque", "💬  En parler avec Nox")) { _, w ->
                 if (w == 0) library.addDocument(title, txt) { n -> toast("Ajouté à la bibliothèque ($n extrait${if (n > 1) "s" else ""})") }
                 else { input.setText(txt.take(4000)); input.setSelection(input.text.length) }
             }.show()
@@ -706,16 +874,19 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun welcomeText() = buildString {
         append(greeting()).append(" Je suis **Nox**. Je vis entièrement dans ce téléphone : ")
         append("pas de cloud, pas de compte, rien ne sort d'ici.\n\n")
-        append("Touche l'orbe et parle-moi, ou écris en bas. ")
-        append("Un appui long sur l'orbe active le mode mains libres : on discute à voix haute, sans toucher l'écran.")
+        append("Touche le micro et parle-moi, ou écris en bas. Un appui long sur le bouton power me réveille de n'importe où, ")
+        append("et je peux piloter tes applis et lire tes notifications si tu me donnes les accès (menu › Autorisations).")
     }
 
     fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
     companion object {
+        const val EXTRA_VOICE = "com.application.nox.VOICE"
+        const val REQ_PERM = 13
+        const val REQ_PERMS_CENTER = 15
         private const val REQ_MIC = 11
         private const val REQ_ALL = 12
-        private const val REQ_PERM = 13
         private const val REQ_IMAGE = 14
+        private const val REQ_CAMERA = 16
     }
 }

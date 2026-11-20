@@ -123,6 +123,11 @@ object NoxLog {
         listener?.let { l -> main.post { l(e) } }
     }
 
+    /** Attend que les lignes en file soient écrites (avant de tuer le processus). */
+    fun flush() {
+        try { io.submit {}.get(800, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (_: Throwable) {}
+    }
+
     private fun writeNow(e: Entry) {
         val d = dir ?: return
         try {

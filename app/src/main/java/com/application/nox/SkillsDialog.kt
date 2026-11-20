@@ -1,6 +1,5 @@
 package com.application.nox
 
-import android.app.AlertDialog
 import android.content.res.ColorStateList
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -25,7 +24,7 @@ class SkillsDialog(private val a: MainActivity) {
 
         /** Copie le fichier .db choisi puis l'intègre à la bibliothèque. */
         fun importFreekipedia(a: MainActivity, uri: android.net.Uri) {
-            val prog = AlertDialog.Builder(a).setTitle("Freekipedia").setMessage("Lecture du fichier…").setCancelable(false).show()
+            val prog = NoxDialog.Builder(a).setTitle("Freekipedia").setMessage("Lecture du fichier…").setCancelable(false).show()
             Thread {
                 try {
                     val tmp = java.io.File(a.cacheDir, "freekipedia_import.db")
@@ -34,7 +33,7 @@ class SkillsDialog(private val a: MainActivity) {
                     a.library.importFreekipedia(tmp) { r, err ->
                         prog.dismiss()
                         if (r == null) a.toast("Import Freekipedia impossible : $err")
-                        else AlertDialog.Builder(a).setTitle("Freekipedia intégré")
+                        else NoxDialog.Builder(a).setTitle("Freekipedia intégré")
                             .setMessage("${r.fiches} fiches (${r.nouvelles} nouvelles, ${r.maj} remplacées)\n${r.passages} passages ajoutés à la bibliothèque\n${r.info}\n\n" +
                                 if (a.library.semantic) "La vectorisation par EmbeddingGemma se fait en fond (elle se met en pause quand Nox parle)."
                                 else "Recherche par mots-clés active. Installe EmbeddingGemma 2 (◉) pour chercher aussi par le sens.")
@@ -79,8 +78,8 @@ class SkillsDialog(private val a: MainActivity) {
             setPadding(a.dp(22), a.dp(4), a.dp(22), a.dp(12))
         }
         render()
-        AlertDialog.Builder(a)
-            .setTitle("Compétences, mémoire & bibliothèque")
+        NoxDialog.sheet(a)
+            .setTitle("Compétences & bibliothèque")
             .setView(ScrollView(a).apply { addView(body) })
             .setPositiveButton("Fermer", null)
             .setOnDismissListener { if (changed) a.applyConversationSettings() }
@@ -94,7 +93,7 @@ class SkillsDialog(private val a: MainActivity) {
             gravity = android.view.Gravity.TOP
         }
         val box = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(22), a.dp(8), a.dp(22), 0); addView(title); addView(body2) }
-        AlertDialog.Builder(a).setTitle("Ajouter un texte").setView(box)
+        NoxDialog.Builder(a).setTitle("Ajouter un texte").setView(box)
             .setPositiveButton("Ajouter") { _, _ ->
                 val t = body2.text.toString().trim()
                 if (t.isEmpty()) return@setPositiveButton
@@ -132,11 +131,11 @@ class SkillsDialog(private val a: MainActivity) {
         val (fkFiches, fkPassages) = a.library.freekipediaStats()
         body.addView(a.text(if (fkFiches > 0) "🌐  Freekipedia : $fkFiches fiches · $fkPassages passages" else "🌐  Freekipedia : aucune fiche pour l'instant", 14f, Ui.TEXT).apply {
             setPadding(a.dp(12), a.dp(9), a.dp(12), a.dp(9))
-            background = Ui.ripple(Ui.rounded(0xFF1A1630.toInt(), a.dp(12).toFloat(), Ui.STROKE, a.dp(1)))
+            background = Ui.ripple(Ui.rounded(Ui.CARD, a.dp(12).toFloat(), 0x22FFFFFF, a.dp(1)))
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(8) }
             setOnClickListener {
                 val items = if (fkFiches > 0) arrayOf("Importer une mise à jour (.db)", "Retirer toutes les fiches Freekipedia") else arrayOf("Importer une mise à jour (.db)")
-                AlertDialog.Builder(a).setTitle("Freekipedia").setItems(items) { _, w ->
+                NoxDialog.Builder(a).setTitle("Freekipedia").setItems(items) { _, w ->
                     if (w == 0) pickFreekipedia(a) else a.library.removeFreekipedia { render() }
                 }.show()
             }
@@ -145,10 +144,10 @@ class SkillsDialog(private val a: MainActivity) {
         docs.forEach { (title, n) ->
             body.addView(a.text("📄  $title  ·  $n extrait${if (n > 1) "s" else ""}", 14f, Ui.TEXT).apply {
                 setPadding(a.dp(12), a.dp(9), a.dp(12), a.dp(9))
-                background = Ui.ripple(Ui.rounded(Ui.SURFACE, a.dp(12).toFloat()))
+                background = Ui.ripple(Ui.rounded(Ui.CARD, a.dp(12).toFloat()))
                 layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(6) }
                 setOnClickListener {
-                    AlertDialog.Builder(a).setMessage("Retirer « $title » de la bibliothèque ?")
+                    NoxDialog.Builder(a).setMessage("Retirer « $title » de la bibliothèque ?")
                         .setPositiveButton("Retirer") { _, _ -> a.library.removeSource("doc:$title") { render() } }
                         .setNegativeButton("Annuler", null).show()
                 }
@@ -183,7 +182,7 @@ class SkillsDialog(private val a: MainActivity) {
         }
         body.addView(swChats)
         body.addView(a.pillButton("Effacer les conversations mémorisées", filled = false) {
-            AlertDialog.Builder(a).setMessage("Effacer tous les échanges mémorisés de la bibliothèque ?")
+            NoxDialog.Builder(a).setMessage("Effacer tous les échanges mémorisés de la bibliothèque ?")
                 .setPositiveButton("Effacer") { _, _ -> a.library.clearConversations { render() } }
                 .setNegativeButton("Annuler", null).show()
         }.apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(6) } })
@@ -203,17 +202,17 @@ class SkillsDialog(private val a: MainActivity) {
             facts.forEachIndexed { i, f ->
                 body.addView(a.text("•  $f", 14f, Ui.TEXT).apply {
                     setPadding(a.dp(12), a.dp(9), a.dp(12), a.dp(9))
-                    background = Ui.ripple(Ui.rounded(Ui.SURFACE, a.dp(12).toFloat()))
+                    background = Ui.ripple(Ui.rounded(Ui.CARD, a.dp(12).toFloat()))
                     layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(6) }
                     setOnClickListener {
-                        AlertDialog.Builder(a).setMessage("Oublier « $f » ?")
+                        NoxDialog.Builder(a).setMessage("Oublier « $f » ?")
                             .setPositiveButton("Oublier") { _, _ -> a.skills.memory.removeAt(i); changed = true; render() }
                             .setNegativeButton("Annuler", null).show()
                     }
                 })
             }
             body.addView(a.pillButton("Tout oublier", filled = false) {
-                AlertDialog.Builder(a).setMessage("Effacer toute la mémoire longue de Nox ?")
+                NoxDialog.Builder(a).setMessage("Effacer toute la mémoire longue de Nox ?")
                     .setPositiveButton("Effacer") { _, _ ->
                         a.skills.memory.forgetAll(); changed = true; render()
                     }.setNegativeButton("Annuler", null).show()

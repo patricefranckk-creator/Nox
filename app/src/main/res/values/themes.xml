@@ -7,11 +7,14 @@
         <item name="android:navigationBarColor">@color/nox_bg</item>
         <item name="android:statusBarColor">@color/nox_bg</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:alertDialogTheme">@style/Theme.Nox.Dialog</item>
     </style>
 
-    <style name="Theme.Nox.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
-        <item name="android:colorAccent">@color/nox_accent</item>
-        <item name="android:windowBackground">@drawable/dialog_bg</item>
+    <!-- Point d'entrée du bouton power : invisible, il passe aussitôt la main à Nox -->
+    <style name="Theme.Nox.Relay" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
     </style>
 </resources>
