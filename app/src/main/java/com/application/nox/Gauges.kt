@@ -178,7 +178,7 @@ class GaugePanel(private val a: MainActivity, private val root: FrameLayout, pri
     private val bat = Card(a, "Batterie")
     var isOpen = false; private set
     var onChange: ((Boolean) -> Unit)? = null
-    private val backCb = android.window.OnBackInvokedCallback { close() }
+    private val backCb by lazy { android.window.OnBackInvokedCallback { close() } }
 
     private val tick = object : Runnable {
         override fun run() {

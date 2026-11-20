@@ -93,6 +93,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         gauges = GaugePanel(this, root) { header.bottom }
         gauges.onChange = { open -> styleGaugeButton(open) }
         voicePage = VoicePage(this, root)
+        setMode(NeuronView.State.OFF, "")
 
         if (messages.isEmpty()) addTurn(ChatMsg(false, welcomeText()), save = false, register = false)
         else messages.forEach { addTurn(it, save = false, register = false) }
@@ -294,7 +295,6 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             if (ime.bottom > 0) scrollToEnd()
             insets
         }
-        setMode(NeuronView.State.OFF, "")
         return root
     }
 
@@ -385,7 +385,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun setMode(state: NeuronView.State, hint: String) {
         mode = state
         neuron.state = state
-        voicePage.set(state, hint)
+        if (::voicePage.isInitialized) voicePage.set(state, hint)
         val (dot, label) = when (state) {
             NeuronView.State.OFF -> (if (Nox.loading) Ui.AMBER else Ui.FAINT) to (if (Nox.loading) "réveil…" else "endormi")
             NeuronView.State.IDLE -> 0xFF5FD39A.toInt() to "prêt · ${engine.modelLabel} · ${engine.backendLabel}"

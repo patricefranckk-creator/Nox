@@ -33,7 +33,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         maxLines = 4
     }
     var isOpen = false; private set
-    private val backCb = android.window.OnBackInvokedCallback { a.closeVoicePage() }
+    private val backCb by lazy { android.window.OnBackInvokedCallback { a.closeVoicePage() } }
 
     init {
         val col = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
