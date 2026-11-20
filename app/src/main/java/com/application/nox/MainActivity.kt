@@ -371,7 +371,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         val loading = android.animation.ObjectAnimator.ofFloat(bar, "translationX", -dp(48).toFloat(), dp(120).toFloat()).apply {
             duration = 1300; repeatCount = android.animation.ValueAnimator.INFINITE
             interpolator = android.view.animation.AccelerateDecelerateInterpolator()
-        }.start()
+        }
+        loading.start()
         splash.addView(col, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         val foot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
         foot.addView(TextView(this).apply {
