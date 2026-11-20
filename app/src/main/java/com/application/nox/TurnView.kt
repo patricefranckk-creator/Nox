@@ -1,11 +1,6 @@
 package com.application.nox
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.ColorFilter
-import android.graphics.Paint
-import android.graphics.PixelFormat
-import android.graphics.drawable.Drawable
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -16,9 +11,10 @@ import android.widget.TextView
 import com.application.nox.Ui.dp
 
 /**
- * Un tour de parole sur le fil de Lia : une ligne verticale à gauche, un point bleu pour Nox,
- * « TOI » en orange aligné à droite, « NOX » en bleu ; autour de la réponse ce qui l'a nourrie
- * (extraits de la bibliothèque, actions faites) puis les relances à toucher.
+ * Un tour de parole, épuré : ta question dans une bulle à droite ; la réponse de Nox en texte simple,
+ * sous un petit « NOX ». En dessous, au plus deux lignes grises : les sources (bibliothèque ou sites)
+ * et ce que Nox a fait (appli pilotée, minuteur…). Ni relances, ni numéros, ni boutons : appui long
+ * sur un message pour le copier, le relire ou le modifier.
  */
 class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
 
@@ -27,75 +23,87 @@ class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
         fun readAloud(m: ChatMsg)
         fun edit(m: ChatMsg)
         fun quickReply(text: String)
+        fun openSources(m: ChatMsg) {}
     }
 
     val body: TextView
-    private val contextBox: LinearLayout
-    private val toolsBox: LinearLayout
-    private val footer: LinearLayout
-    private val suggestBox: FlowLayout
-    private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.ACCENT }
+    private val sourcesLine: LinearLayout
+    private val sourcesText: TextView
+    private val sourcesIcon: ImageView
+    private val toolsLine: LinearLayout
+    private val toolsText: TextView
     var actions: Actions? = null
 
     init {
         orientation = VERTICAL
-        setWillNotDraw(false)
         val user = msg.fromUser
         gravity = if (user) Gravity.END else Gravity.START
-        setPadding(a.dp(18), a.dp(13), a.dp(18), a.dp(13))
+        setPadding(a.dp(18), a.dp(9), a.dp(18), a.dp(9))
 
-        addView(TextView(a).apply {
-            text = if (user) "TOI" else "NOX"
-            setTextColor(if (user) Ui.USER_TAG else Ui.ACCENT)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        if (!user) addView(TextView(a).apply {
+            text = "NOX"
+            setTextColor(Ui.ACCENT)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             typeface = Ui.BLACK
-            letterSpacing = 0.19f
+            letterSpacing = 0.17f
         })
-
-        contextBox = LinearLayout(a).apply {
-            orientation = VERTICAL
-            visibility = GONE
-            setPadding(a.dp(12), a.dp(10), a.dp(12), a.dp(10))
-            background = Ui.rounded(0xFF131C30.toInt(), a.dp(14).toFloat(), 0xFF22325A.toInt(), a.dp(1))
-        }
-        addView(contextBox, LayoutParams(-1, -2).apply { topMargin = a.dp(10) })
-
-        toolsBox = LinearLayout(a).apply { orientation = VERTICAL; visibility = GONE }
-        addView(toolsBox, LayoutParams(-2, -2).apply { topMargin = a.dp(6) })
 
         body = TextView(a).apply {
             if (user) {
                 setTextColor(Ui.USER_TEXT)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                typeface = Ui.BLACK
-                gravity = Gravity.END
-                setLineSpacing(0f, 1.25f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                typeface = Ui.MEDIUM
+                setLineSpacing(0f, 1.3f)
+                setPadding(a.dp(15), a.dp(11), a.dp(15), a.dp(11))
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(Ui.USER_BUBBLE)
+                    val r = a.dp(18).toFloat(); val small = a.dp(6).toFloat()
+                    cornerRadii = floatArrayOf(r, r, r, r, small, small, r, r)
+                    setStroke(a.dp(1), Ui.USER_BUBBLE_STROKE)
+                }
+                maxWidth = (a.resources.displayMetrics.widthPixels * 0.78).toInt()
             } else {
-                setTextColor(Ui.TEXT)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18.5f)
-                typeface = Ui.BOLD
-                setLineSpacing(0f, 1.38f)
+                setTextColor(Ui.ANSWER)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
+                typeface = Ui.MEDIUM
+                setLineSpacing(0f, 1.42f)
             }
+            setOnLongClickListener { showActions(); true }
         }
-        addView(body, LayoutParams(if (user) -2 else -1, -2).apply { topMargin = a.dp(if (user) 8 else 10) })
+        addView(body, LayoutParams(if (user) -2 else -1, -2).apply { topMargin = a.dp(if (user) 0 else 6) })
 
-        footer = LinearLayout(a).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        addView(footer, LayoutParams(-2, -2).apply { topMargin = a.dp(6) })
+        sourcesIcon = ImageView(a).apply { setColorFilter(0xFF7E889C.toInt()) }
+        sourcesText = line()
+        sourcesLine = lineBox(sourcesIcon, sourcesText, chevron = true).apply { setOnClickListener { actions?.openSources(msg) } }
+        addView(sourcesLine, LayoutParams(-1, a.dp(40)).apply { topMargin = a.dp(4) })
 
-        suggestBox = FlowLayout(a, a.dp(8)).apply { visibility = GONE }
-        addView(suggestBox, LayoutParams(-1, -2).apply { topMargin = a.dp(12) })
+        toolsText = line()
+        toolsLine = lineBox(ImageView(a).apply { setImageResource(drawable("ic_phone_small")); setColorFilter(0xFF7E889C.toInt()) }, toolsText, chevron = false)
+        addView(toolsLine, LayoutParams(-1, a.dp(32)).apply { topMargin = a.dp(2) })
 
         render()
         refreshFooter()
         msg.sources.takeIf { it.isNotEmpty() }?.let { setSources(it) }
-        msg.tools.forEach { addTool(it) }
-        if (msg.suggestions.isNotEmpty()) setSuggestions(msg.suggestions)
+        refreshTools()
     }
 
-    /** Le point bleu sur la ligne du fil, devant « NOX ». */
-    override fun onDraw(c: Canvas) {
-        super.onDraw(c)
-        if (!msg.fromUser) c.drawCircle((paddingLeft - a.dp(11)).toFloat(), paddingTop + a.dp(9).toFloat(), a.dp(5).toFloat(), dot)
+    private fun drawable(name: String): Int = a.resources.getIdentifier(name, "drawable", a.packageName)
+
+    private fun line() = TextView(a).apply {
+        setTextColor(0xFF7E889C.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.MEDIUM
+        maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+    }
+
+    private fun lineBox(icon: ImageView, label: TextView, chevron: Boolean) = LinearLayout(a).apply {
+        orientation = HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        visibility = GONE
+        addView(icon, LayoutParams(a.dp(15), a.dp(15)).apply { marginEnd = a.dp(8) })
+        addView(label, LayoutParams(0, -2, 1f))
+        if (chevron) addView(TextView(a).apply {
+            text = "›"; setTextColor(0xFF7E889C.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setPadding(a.dp(6), 0, a.dp(4), a.dp(2))
+        })
     }
 
     fun render() {
@@ -107,90 +115,57 @@ class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
         }
     }
 
-    /** Petites icônes sous le message : copier, relire (Nox) ou modifier (toi). */
-    fun refreshFooter() {
-        footer.removeAllViews()
-        if (msg.text.isBlank()) { footer.visibility = GONE; return }
-        footer.visibility = VISIBLE
-        if (msg.fromUser) footer.addView(icon("ic_edit", "Modifier") { actions?.edit(msg) })
-        footer.addView(icon("ic_copy", "Copier") { actions?.copy(msg) })
-        if (!msg.fromUser) footer.addView(icon("ic_volume", "Relire à voix haute") { actions?.readAloud(msg) })
-        if (msg.voice) footer.addView(TextView(a).apply {
-            text = if (msg.fromUser) "dit à voix haute" else "lu à voix haute"
-            setTextColor(Ui.FAINT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Ui.BOLD
-            setPadding(a.dp(2), 0, 0, 0)
-        })
+    /** Plus d'icônes sous les messages : tout passe par l'appui long. */
+    fun refreshFooter() {}
+
+    private fun showActions() {
+        if (msg.text.isBlank()) return
+        val labels = ArrayList<String>()
+        val acts = ArrayList<() -> Unit>()
+        labels += "Copier"; acts += { actions?.copy(msg) }
+        if (!msg.fromUser) { labels += "Relire à voix haute"; acts += { actions?.readAloud(msg) } }
+        if (msg.fromUser) { labels += "Modifier et renvoyer"; acts += { actions?.edit(msg) } }
+        if (msg.sources.isNotEmpty()) { labels += "Voir les sources"; acts += { actions?.openSources(msg) } }
+        NoxDialog.Builder(a).setItems(labels.toTypedArray()) { _, i -> acts[i]() }.show()
     }
 
-    private fun icon(name: String, desc: String, onClick: () -> Unit) = ImageView(a).apply {
-        val id = a.resources.getIdentifier(name, "drawable", a.packageName)
-        if (id != 0) setImageResource(id)
-        setColorFilter(Ui.FAINT)
-        contentDescription = desc
-        setPadding(a.dp(4), a.dp(4), a.dp(4), a.dp(4))
-        layoutParams = LayoutParams(a.dp(26), a.dp(26)).apply { marginEnd = a.dp(10) }
-        background = Ui.ripple(Ui.rounded(0, a.dp(13).toFloat()))
-        setOnClickListener { onClick() }
+    /**
+     * Sources de la réponse : titres de la bibliothèque, ou « titre » + séparateur + lien pour le web.
+     * Une seule ligne grise : livre pour la bibliothèque, globe pour internet.
+     */
+    fun setSources(list: List<String>) {
+        msg.sources = list
+        if (list.isEmpty()) { sourcesLine.visibility = GONE; return }
+        val web = list.any { it.contains(SEP) }
+        sourcesIcon.setImageResource(drawable(if (web) "ic_globe_small" else "ic_book_small"))
+        sourcesText.text = if (web) list.mapNotNull { sourceUrl(it)?.let { u -> domain(u) } }.distinct().take(3).joinToString(" · ")
+            else list.map { sourceTitle(it).substringBefore(" (").substringBefore(" · ") }.distinct().take(3).joinToString(" · ")
+        sourcesLine.visibility = VISIBLE
     }
 
-    /** Carte « Dans ta bibliothèque » : ce que Nox a relu avant de répondre. */
-    fun setSources(titles: List<String>) {
-        msg.sources = titles
-        contextBox.removeAllViews()
-        contextBox.addView(TextView(a).apply {
-            text = "DANS TA BIBLIOTHÈQUE"
-            setTextColor(0xFF7FBFFF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f); typeface = Ui.BLACK
-            letterSpacing = 0.15f
-        })
-        titles.take(4).forEach { t ->
-            contextBox.addView(TextView(a).apply {
-                text = t
-                setTextColor(Ui.MUTED); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
-                maxLines = 2; setPadding(0, a.dp(3), 0, 0)
-            })
-        }
-        contextBox.visibility = VISIBLE
-    }
-
-    /** Une action faite pendant la réponse (« ⏱ 5 min »). */
+    /** Une action faite pendant la réponse : regroupées sur une seule ligne grise. */
     fun addTool(label: String) {
         if (label !in msg.tools) msg.tools += label
-        toolsBox.visibility = VISIBLE
-        toolsBox.addView(TextView(a).apply {
-            text = label
-            setTextColor(Ui.CYAN); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
-            setPadding(a.dp(11), a.dp(5), a.dp(11), a.dp(5))
-            background = Ui.rounded(0xFF0F2235.toInt(), a.dp(12).toFloat(), 0xFF1D4A6E.toInt(), a.dp(1))
-        }, LayoutParams(-2, -2).apply { topMargin = a.dp(4) })
+        refreshTools()
     }
 
-    /** Relances proposées par Nox : un tap = l'envoyer. */
-    fun setSuggestions(list: List<String>) {
-        msg.suggestions = list
-        suggestBox.removeAllViews()
-        if (list.isEmpty()) { suggestBox.visibility = GONE; return }
-        list.forEach { s ->
-            suggestBox.addView(TextView(a).apply {
-                text = s
-                setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Ui.BOLD
-                setPadding(a.dp(15), a.dp(9), a.dp(15), a.dp(9))
-                background = Ui.ripple(Ui.rounded(0, a.dp(20).toFloat(), Ui.ACCENT, a.dp(1.5f)))
-                setOnClickListener { actions?.quickReply(s) }
-            })
-        }
-        suggestBox.visibility = VISIBLE
+    private fun refreshTools() {
+        if (msg.tools.isEmpty()) { toolsLine.visibility = GONE; return }
+        toolsText.text = msg.tools.map { it.replace(Regex("^[^\\p{L}\\p{N}«]+"), "").trim() }.filter { it.isNotEmpty() }.distinct().joinToString(" · ")
+        toolsLine.visibility = VISIBLE
     }
 
-    fun clearSuggestions() { suggestBox.visibility = GONE }
+    /** Relances retirées du chat épuré. */
+    fun setSuggestions(list: List<String>) { msg.suggestions = emptyList() }
 
-    /** Ligne verticale fixe du fil, dessinée derrière la conversation qui défile. */
-    class Timeline(private val x: Float, private val w: Float) : Drawable() {
-        private val p = Paint().apply { color = Ui.TIMELINE }
-        override fun draw(c: Canvas) { c.drawRect(x - w / 2, bounds.top.toFloat(), x + w / 2, bounds.bottom.toFloat(), p) }
-        override fun setAlpha(alpha: Int) { p.alpha = alpha }
-        override fun setColorFilter(cf: ColorFilter?) { p.colorFilter = cf }
-        @Deprecated("Deprecated in Java")
-        override fun getOpacity() = PixelFormat.TRANSLUCENT
+    fun clearSuggestions() {}
+
+    companion object {
+        /** Sépare le titre et le lien d'une source web dans [ChatMsg.sources]. */
+        const val SEP = "\u001F"
+        fun sourceTitle(s: String) = s.substringBefore(SEP)
+        fun sourceUrl(s: String): String? = s.substringAfter(SEP, "").ifBlank { null }
+        fun domain(url: String): String = try { java.net.URL(url).host.removePrefix("www.") } catch (_: Exception) { url }
     }
 }
 

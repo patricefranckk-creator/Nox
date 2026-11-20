@@ -42,6 +42,8 @@ class Skills(private val ctx: Context, private val library: Library) {
 
     /** Puce affichée dans le chat quand une action est faite. */
     var onUsed: ((label: String) -> Unit)? = null
+    /** Sources d'une réponse (titre + séparateur + lien), affichées sous la réponse en cours. */
+    var onSources: ((List<String>) -> Unit)? = null
     /** Demande d'autorisation Android (contacts…) déléguée à l'activité. */
     var askPermission: ((String) -> Unit)? = null
     /** Les échanges plus récents que ça sont déjà dans le contexte : inutile de les rechercher. */
@@ -334,6 +336,20 @@ class Skills(private val ctx: Context, private val library: Library) {
                 "tout_effacer" -> { used("🔕 tout effacé"); n.dismiss(null) }
                 else -> { used("🔔 lecture"); n.read(p.optString("appli").takeIf { it.isNotBlank() }) }
             }
+        },
+
+        Skill("internet", "Recherche sur internet",
+            "Cherche sur internet et renvoie des extraits des pages trouvées. Seulement quand l'utilisateur demande de chercher sur internet, le net, la toile ou le web, ou pour une info récente que tu ne peux pas connaître.",
+            obj("requete" to str("ce qu'il faut chercher, en quelques mots"), required = listOf("requete"))) { p ->
+            val q = p.optString("requete").trim()
+            require(q.isNotEmpty()) { "requête vide" }
+            if (!Nox.prefs.webSearch) return@Skill "La recherche sur internet est désactivée dans les réglages de Nox. Dis-le à l'utilisateur."
+            val results = WebSearch.search(q)
+            if (results.isEmpty()) return@Skill "Aucun résultat sur internet (connexion absente ?). Dis-le simplement."
+            val list = results.take(5).map { it.title + TurnView.SEP + it.url }
+            main.post { onSources?.invoke(list) }
+            used("🌐 recherche sur internet")
+            WebSearch.contextBlock(q, results)
         },
 
         Skill("partager", "Partager & copier", "Partage un texte vers une autre appli, le copie dans le presse-papier, ou lance une recherche web dans le navigateur.",

@@ -18,7 +18,7 @@ android {
         // Numéro de version automatique : chaque build GitHub Actions incrémente le dernier chiffre.
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
-        versionName = "2.2.$build"
+        versionName = "2.3.$build"
         val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)
         val date = LocalDateTime.now(ZoneId.of("Europe/Paris")).format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
         resValue("string", "nox_commit", sha)

@@ -15,13 +15,13 @@ import android.widget.TextView
 /** Petits outils pour construire l'interface en code (aucun XML de layout, aucune dépendance). */
 object Ui {
     // Palette reprise de Lia
-    const val BG = 0xFF0B1120.toInt()
-    const val SURFACE = 0xFF161E2E.toInt()
+    const val BG = 0xFF070B14.toInt()
+    const val SURFACE = 0xFF0F1524.toInt()
     const val SURFACE_HI = 0xFF1B2D4D.toInt()
-    const val STROKE = 0xFF2A3456.toInt()
+    const val STROKE = 0xFF1E2740.toInt()
     const val TEXT = 0xFFEEF2FA.toInt()
     const val MUTED = 0xFF9AA3B5.toInt()
-    const val FAINT = 0xFF4D5568.toInt()
+    const val FAINT = 0xFF6F7890.toInt()
     const val USER_TEXT = 0xFFF6C08A.toInt()
     const val USER_TAG = 0xFFFFB36B.toInt()
     const val ACCENT = 0xFF4FA6FF.toInt()          // bleu de Lia
@@ -30,12 +30,16 @@ object Ui {
     const val GREEN = 0xFF7ED36B.toInt()
     const val AMBER = 0xFFFFC170.toInt()
     const val DANGER = 0xFFE8806E.toInt()
-    const val TIMELINE = 0xFF2A4473.toInt()
-    // Popups et menus (gris violacé de Lia)
-    const val SHEET = 0xFF2A2933.toInt()
-    const val CARD = 0xFF35343E.toInt()
-    const val TILE = 0xFF1A2038.toInt()
-    const val TILE_STROKE = 0xFF2E3A63.toInt()
+    const val TIMELINE = 0xFF22304F.toInt()
+    // Popups et menus : bleu nuit, cartes fines
+    const val SHEET = 0xFF0D1322.toInt()
+    const val CARD = 0xFF121A2C.toInt()
+    const val TILE = 0xFF121A2C.toInt()
+    const val TILE_STROKE = 0xFF1E2740.toInt()
+    const val SOFT = 0xFF151D30.toInt()
+    const val ANSWER = 0xFFE6EBF5.toInt()
+    const val USER_BUBBLE = 0xFF2A1E12.toInt()
+    const val USER_BUBBLE_STROKE = 0xFF4A3218.toInt()
 
     /** Police arrondie et grasse, comme dans Lia. */
     val BOLD: Typeface = Typeface.create("sans-serif", Typeface.BOLD)
@@ -86,7 +90,7 @@ object Ui {
         setTextColor(TEXT); setHintTextColor(FAINT)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
         typeface = MEDIUM
-        background = rounded(CARD, dp(16).toFloat(), 0x22FFFFFF, dp(1))
+        background = rounded(0xFF0B1020.toInt(), dp(14).toFloat(), 0xFF263252.toInt(), dp(1))
         setPadding(dp(16), dp(12), dp(16), dp(12))
         if (lines > 1) { minLines = lines; gravity = Gravity.TOP } else isSingleLine = true
     }
@@ -99,13 +103,14 @@ object Ui {
         isChecked = checked
         val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
         thumbTintList = ColorStateList(states, intArrayOf(ACCENT, 0xFFB8BCC8.toInt()))
-        trackTintList = ColorStateList(states, intArrayOf(0x884FA6FF.toInt(), 0x55FFFFFF))
+        thumbTintList = ColorStateList(states, intArrayOf(0xFFFFFFFF.toInt(), 0xFF9AA3B5.toInt()))
+        trackTintList = ColorStateList(states, intArrayOf(ACCENT, 0xFF2A3456.toInt()))
         setPadding(0, dp(10), 0, dp(10))
         setOnCheckedChangeListener { _, v -> onChange(v) }
     }
 
-    fun Context.sectionTitle(s: String) = text(s.uppercase(), 11.5f, MUTED, bold = true).apply {
-        letterSpacing = 0.12f
+    fun Context.sectionTitle(s: String) = text(s.uppercase(), 11.5f, CYAN, bold = true).apply {
+        letterSpacing = 0.14f
         setPadding(0, dp(18), 0, dp(6))
     }
 }

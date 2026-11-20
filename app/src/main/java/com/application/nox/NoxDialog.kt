@@ -17,9 +17,9 @@ import android.widget.TextView
 import com.application.nox.Ui.dp
 
 /**
- * Les popups de Nox, dans le style de Lia : carte gris violacé arrondie, titre gras,
- * boutons-pilules (principal plein, secondaire discret, destructif en corail), listes en lignes
- * alternées. Même API que AlertDialog.Builder pour le reste du code.
+ * Les popups de Nox : carte bleu nuit au fil fin, titre gras, boutons pleine largeur (principal
+ * coloré, secondaire sobre, destructif en corail), lignes groupées en cartes avec icône teintée.
+ * Même API que AlertDialog.Builder pour le reste du code.
  */
 class NoxDialog private constructor(private val ctx: Context, private val sheet: Boolean) {
 
@@ -82,22 +82,22 @@ class NoxDialog private constructor(private val ctx: Context, private val sheet:
         card.background = android.graphics.drawable.GradientDrawable().apply {
             setColor(Ui.SHEET)
             cornerRadii = if (sheet) floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f) else FloatArray(8) { r }
-            setStroke(ctx.dp(1), 0x22FFFFFF)
+            setStroke(ctx.dp(1), Ui.STROKE)
         }
         card.setPadding(ctx.dp(20), ctx.dp(if (sheet) 12 else 22), ctx.dp(20), ctx.dp(18))
 
         if (sheet) {
             card.addView(View(ctx).apply {
-                background = Ui.rounded(0xFF9C9AA8.toInt(), ctx.dp(3).toFloat())
-            }, LinearLayout.LayoutParams(ctx.dp(40), ctx.dp(5)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = ctx.dp(14) })
+                background = Ui.rounded(0xFF2A3456.toInt(), ctx.dp(2).toFloat())
+            }, LinearLayout.LayoutParams(ctx.dp(40), ctx.dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = ctx.dp(14) })
         }
 
         // En-tête : icône facultative, titre, et « Fermer » pour les panneaux
         if (title != null || sheet) {
             val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             if (icon != null) head.addView(TextView(ctx).apply {
-                text = icon; setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f); gravity = Gravity.CENTER
-                background = Ui.rounded(Ui.TILE, ctx.dp(14).toFloat(), Ui.TILE_STROKE, ctx.dp(1))
+                text = icon; setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f); gravity = Gravity.CENTER
+                background = Ui.rounded(Ui.SOFT, ctx.dp(14).toFloat())
             }, LinearLayout.LayoutParams(ctx.dp(44), ctx.dp(44)).apply { marginEnd = ctx.dp(12) })
             head.addView(TextView(ctx).apply {
                 text = title ?: ""
@@ -105,30 +105,31 @@ class NoxDialog private constructor(private val ctx: Context, private val sheet:
                 typeface = Ui.BLACK
             }, LinearLayout.LayoutParams(0, -2, 1f))
             if (sheet) head.addView(TextView(ctx).apply {
-                text = "Fermer"; setTextColor(Ui.LAVENDER); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); typeface = Ui.BOLD
-                setPadding(ctx.dp(10), ctx.dp(10), ctx.dp(4), ctx.dp(10))
+                text = "✕"; gravity = Gravity.CENTER; contentDescription = "Fermer"
+                setTextColor(0xFFC9D1E3.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); typeface = Ui.BOLD
+                background = Ui.ripple(Ui.rounded(Ui.SOFT, ctx.dp(14).toFloat()))
                 setOnClickListener { dismiss() }
-            })
+            }, LinearLayout.LayoutParams(ctx.dp(44), ctx.dp(44)))
             card.addView(head)
         }
 
         val content = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         if (message != null) {
             msgView = TextView(ctx).apply {
-                text = message; setTextColor(0xFFC9CCD6.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
-                typeface = Ui.MEDIUM; setLineSpacing(0f, 1.3f)
+                text = message; setTextColor(0xFFA7B0C2.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                typeface = Ui.MEDIUM; setLineSpacing(0f, 1.35f)
                 setPadding(0, ctx.dp(if (title != null) 10 else 0), 0, ctx.dp(4))
             }
             content.addView(msgView)
         }
         items?.forEachIndexed { i, label ->
             content.addView(TextView(ctx).apply {
-                text = label; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f); typeface = Ui.BOLD
+                text = label; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); typeface = Ui.BOLD
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(ctx.dp(18), 0, ctx.dp(18), 0)
-                background = Ui.ripple(Ui.rounded(if (i % 2 == 0) Ui.CARD else Color.TRANSPARENT, ctx.dp(18).toFloat()))
+                setPadding(ctx.dp(16), 0, ctx.dp(16), 0)
+                background = Ui.ripple(Ui.rounded(Ui.CARD, ctx.dp(16).toFloat()))
                 setOnClickListener { itemsListener?.invoke(this@NoxDialog, i); dismiss() }
-            }, LinearLayout.LayoutParams(-1, ctx.dp(56)).apply { topMargin = ctx.dp(if (i == 0) 12 else 4) })
+            }, LinearLayout.LayoutParams(-1, ctx.dp(54)).apply { topMargin = ctx.dp(if (i == 0) 12 else 6) })
         }
         if (view != null) {
             (view.parent as? ViewGroup)?.removeView(view)
@@ -144,19 +145,27 @@ class NoxDialog private constructor(private val ctx: Context, private val sheet:
         }.apply { isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER; addView(content) }
         card.addView(scroll, LinearLayout.LayoutParams(-1, -2))
 
-        // Boutons : secondaire(s) à gauche, principal à droite
+        // Boutons pleine largeur : empilés (principal en haut) dans une fenêtre, côte à côte dans un panneau
         if (pos != null || neg != null || neutral != null) {
-            val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
-            row.setPadding(0, ctx.dp(16), 0, 0)
-            neutral?.let { (t, l) -> row.addView(button(t, Style.TEXT) { l?.invoke(this, 0); dismiss() }, LinearLayout.LayoutParams(-2, ctx.dp(46))) }
-            if (neutral != null) row.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f))
-            neg?.let { (t, l) -> row.addView(button(t, Style.TEXT) { l?.invoke(this, 1); dismiss() }, LinearLayout.LayoutParams(-2, ctx.dp(46))) }
+            val stacked = !sheet
+            val box = LinearLayout(ctx).apply {
+                orientation = if (stacked) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+                setPadding(0, ctx.dp(18), 0, 0)
+            }
+            val entries = ArrayList<Triple<String, Style, () -> Unit>>()
             pos?.let { (t, l) ->
                 val danger = DESTRUCTIVE.any { t.lowercase().startsWith(it) }
-                row.addView(button(t, if (danger) Style.DANGER else Style.PRIMARY) { l?.invoke(this, 2); dismiss() },
-                    LinearLayout.LayoutParams(-2, ctx.dp(46)).apply { marginStart = ctx.dp(8) })
+                entries += Triple(t, if (danger) Style.DANGER else Style.PRIMARY) { l?.invoke(this, 2); dismiss() }
             }
-            card.addView(row)
+            neg?.let { (t, l) -> entries += Triple(t, Style.SOFT) { l?.invoke(this, 1); dismiss() } }
+            neutral?.let { (t, l) -> entries += Triple(t, Style.SOFT) { l?.invoke(this, 0); dismiss() } }
+            val ordered = if (stacked) entries else entries.reversed()
+            ordered.forEachIndexed { i, (t, st, act) ->
+                val lp = if (stacked) LinearLayout.LayoutParams(-1, ctx.dp(50)).apply { if (i > 0) topMargin = ctx.dp(8) }
+                    else LinearLayout.LayoutParams(0, ctx.dp(52), 1f).apply { if (i > 0) marginStart = ctx.dp(10) }
+                box.addView(button(t, st) { act() }, lp)
+            }
+            card.addView(box)
         }
 
         dialog.setContentView(card)
@@ -175,7 +184,7 @@ class NoxDialog private constructor(private val ctx: Context, private val sheet:
         }
     }
 
-    enum class Style { PRIMARY, TEXT, DANGER, OUTLINE }
+    enum class Style { PRIMARY, TEXT, DANGER, OUTLINE, SOFT }
 
     private fun button(label: String, style: Style, onClick: () -> Unit) = Companion.button(ctx, label, style, onClick)
 
@@ -188,63 +197,71 @@ class NoxDialog private constructor(private val ctx: Context, private val sheet:
         fun button(ctx: Context, label: String, style: Style, onClick: () -> Unit) = TextView(ctx).apply {
             text = label
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             typeface = Ui.BOLD
-            setPadding(ctx.dp(20), ctx.dp(10), ctx.dp(20), ctx.dp(10))
+            setPadding(ctx.dp(18), ctx.dp(10), ctx.dp(18), ctx.dp(10))
             minWidth = ctx.dp(if (style == Style.TEXT) 0 else 96)
             minHeight = ctx.dp(44)
+            val r = ctx.dp(16).toFloat()
             when (style) {
-                Style.PRIMARY -> { setTextColor(0xFF08111F.toInt()); background = Ui.ripple(Ui.rounded(Ui.ACCENT, ctx.dp(23).toFloat()), 0x33000000) }
-                Style.DANGER -> { setTextColor(0xFF1A0E0B.toInt()); background = Ui.ripple(Ui.rounded(Ui.DANGER, ctx.dp(23).toFloat()), 0x33000000) }
-                Style.OUTLINE -> { setTextColor(Ui.TEXT); background = Ui.ripple(Ui.rounded(Color.TRANSPARENT, ctx.dp(23).toFloat(), 0x55FFFFFF, ctx.dp(1))) }
-                Style.TEXT -> { setTextColor(Ui.LAVENDER); background = Ui.ripple(Ui.rounded(Color.TRANSPARENT, ctx.dp(23).toFloat())) }
+                Style.PRIMARY -> { setTextColor(0xFF08111F.toInt()); background = Ui.ripple(Ui.rounded(Ui.ACCENT, r), 0x33000000) }
+                Style.DANGER -> { setTextColor(0xFF1A0C09.toInt()); background = Ui.ripple(Ui.rounded(Ui.DANGER, r), 0x33000000) }
+                Style.OUTLINE -> { setTextColor(0xFFDDE3EF.toInt()); background = Ui.ripple(Ui.rounded(Ui.SURFACE, r, 0xFF263252.toInt(), ctx.dp(1))) }
+                Style.SOFT -> { setTextColor(0xFFDDE3EF.toInt()); typeface = Ui.MEDIUM; background = Ui.ripple(Ui.rounded(Ui.SOFT, r)) }
+                Style.TEXT -> { setTextColor(Ui.LAVENDER); background = Ui.ripple(Ui.rounded(Color.TRANSPARENT, r)) }
             }
             setOnClickListener { onClick() }
         }
 
-        /** Ligne de menu façon Lia : emoji, libellé, et un détail facultatif à droite. */
+        /** Ligne de menu : icône dans une pastille teintée, libellé, détail ou chevron à droite. */
         fun row(ctx: Context, emoji: String, label: String, shaded: Boolean, detail: String? = null, labelColor: Int = Ui.TEXT,
                 sub: String? = null, onClick: () -> Unit) =
             LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(ctx.dp(18), 0, ctx.dp(16), 0)
-                background = Ui.ripple(Ui.rounded(if (shaded) Ui.CARD else Color.TRANSPARENT, ctx.dp(20).toFloat()))
-                addView(TextView(ctx).apply { text = emoji; setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f); gravity = Gravity.CENTER },
-                    LinearLayout.LayoutParams(ctx.dp(34), -2).apply { marginEnd = ctx.dp(14) })
+                setPadding(ctx.dp(12), 0, ctx.dp(14), 0)
+                background = Ui.ripple(Ui.rounded(Ui.CARD, ctx.dp(16).toFloat()))
+                addView(TextView(ctx).apply {
+                    text = emoji; setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f); gravity = Gravity.CENTER
+                    background = Ui.rounded(if (labelColor == Ui.DANGER) 0xFF2A1714.toInt() else 0xFF1A2236.toInt(), ctx.dp(10).toFloat())
+                }, LinearLayout.LayoutParams(ctx.dp(34), ctx.dp(34)).apply { marginEnd = ctx.dp(12) })
                 val texts = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
                 texts.addView(TextView(ctx).apply {
-                    text = label; setTextColor(labelColor); setTextSize(TypedValue.COMPLEX_UNIT_SP, if (sub == null) 18f else 17f); typeface = Ui.BOLD
+                    text = label; setTextColor(labelColor); setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f); typeface = Ui.MEDIUM
                     maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 })
                 if (sub != null) texts.addView(TextView(ctx).apply {
-                    text = sub; setTextColor(Ui.MUTED); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f); typeface = Ui.BOLD
+                    text = sub; setTextColor(Ui.MUTED); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f); typeface = Ui.MEDIUM
                     maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 })
                 addView(texts, LinearLayout.LayoutParams(0, -2, 1f))
                 if (detail != null) addView(TextView(ctx).apply {
                     text = detail; setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
                     setTextColor(if (detail.startsWith("✓")) Ui.GREEN else Ui.AMBER)
+                    setPadding(ctx.dp(8), 0, 0, 0)
+                }) else if (labelColor != Ui.DANGER) addView(TextView(ctx).apply {
+                    text = "›"; setTextColor(Ui.FAINT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+                    setPadding(ctx.dp(8), 0, 0, ctx.dp(2))
                 })
-                layoutParams = LinearLayout.LayoutParams(-1, ctx.dp(62)).apply { topMargin = ctx.dp(5) }
+                layoutParams = LinearLayout.LayoutParams(-1, ctx.dp(if (sub == null) 56 else 62)).apply { topMargin = ctx.dp(6) }
                 setOnClickListener { onClick() }
             }
 
         fun section(ctx: Context, label: String) = TextView(ctx).apply {
             text = label.uppercase()
-            setTextColor(0xFF9C9AA8.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f); typeface = Ui.BLACK
-            letterSpacing = 0.18f
-            setPadding(ctx.dp(4), ctx.dp(22), 0, ctx.dp(6))
+            setTextColor(Ui.CYAN); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f); typeface = Ui.BLACK
+            letterSpacing = 0.14f
+            setPadding(ctx.dp(6), ctx.dp(20), 0, ctx.dp(4))
         }
 
         /** Tuile « favori » façon Lia. */
         fun tile(ctx: Context, emoji: String, label: String, onClick: () -> Unit) = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            background = Ui.ripple(Ui.rounded(Ui.TILE, ctx.dp(22).toFloat(), Ui.TILE_STROKE, ctx.dp(1)))
-            addView(TextView(ctx).apply { text = emoji; setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f); gravity = Gravity.CENTER })
+            background = Ui.ripple(Ui.rounded(Ui.CARD, ctx.dp(18).toFloat(), Ui.STROKE, ctx.dp(1)))
+            addView(TextView(ctx).apply { text = emoji; setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f); gravity = Gravity.CENTER })
             addView(TextView(ctx).apply {
-                text = label; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Ui.BOLD
+                text = label; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f); typeface = Ui.BOLD
                 gravity = Gravity.CENTER; setPadding(ctx.dp(4), ctx.dp(6), ctx.dp(4), 0); maxLines = 1
             })
             setOnClickListener { onClick() }

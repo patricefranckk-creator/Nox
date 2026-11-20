@@ -97,25 +97,28 @@ class NeuronView(ctx: Context, private val style: Style) : View(ctx) {
                 drawNeuron(c, cx, cy, r * 0.7f * breath(t, 0.035f))
             }
             Style.VOICE -> {
-                val core = r * 0.69f
-                fillPaint.shader = RadialGradient(cx, cy, core * (1f + lv * 0.25f),
-                    intArrayOf(state.glow, state.glow and 0x00FFFFFF or 0x0A000000, 0), floatArrayOf(0f, 0.7f, 1f), Shader.TileMode.CLAMP)
-                fillPaint.alpha = 255
-                c.drawCircle(cx, cy, core * (1f + lv * 0.25f), fillPaint)
-                ringPaint.color = state.ring
-                ringPaint.strokeWidth = r * 0.012f
-                ringPaint.alpha = 16; c.drawCircle(cx, cy, r * 0.98f + lv * r * 0.02f, ringPaint)
-                ringPaint.alpha = 64; c.drawCircle(cx, cy, r * 0.84f * (1f + lv * 0.06f), ringPaint)
-                ringPaint.alpha = 216; ringPaint.strokeWidth = r * 0.016f
-                c.drawCircle(cx, cy, core * (1f + lv * 0.05f), ringPaint)
-                if (state == State.THINKING) orbit(c, cx, cy, core, t, r * 0.025f)
-                if (state == State.LISTENING || state == State.SPEAKING) {
-                    // Onde qui s'élargit au rythme de la voix
-                    val p = (t * 0.6f) % 1f
-                    ringPaint.alpha = ((1f - p) * 90 * (0.4f + lv)).toInt().coerceIn(0, 255)
-                    c.drawCircle(cx, cy, core + (r - core) * p, ringPaint)
+                // Mode vocal épuré : le neurone seul, son halo, et deux ondes dont la couleur et le rythme disent l'état
+                val core = r * 0.62f
+                val (wave, speed, pulse) = when (state) {
+                    State.LISTENING -> Triple(0xFF60A5FA.toInt(), 0.42f, 0.42f)
+                    State.THINKING -> Triple(0xFFA855F7.toInt(), 0.75f, 1.1f)
+                    State.SPEAKING -> Triple(0xFFF0ABFC.toInt(), 1.0f, 2.2f)
+                    else -> Triple(0xFF3E5A92.toInt(), 0.22f, 0.24f)
                 }
-                drawNeuron(c, cx, cy, core * 0.95f * breath(t, 0.02f) * (1f + lv * 0.08f))
+                val haloR = core * 1.3f * (1f + lv * 0.2f)
+                fillPaint.shader = RadialGradient(cx, cy, haloR, intArrayOf((wave and 0x00FFFFFF) or 0x48000000, (wave and 0x00FFFFFF) or 0x10000000, 0),
+                    floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
+                fillPaint.alpha = 255
+                c.drawCircle(cx, cy, haloR, fillPaint)
+                ringPaint.color = wave
+                ringPaint.strokeWidth = r * 0.008f
+                for (k in 0..1) {
+                    val p = (t * speed + k * 0.5f) % 1f
+                    ringPaint.alpha = ((1f - p) * 150 * (0.6f + lv * 0.6f)).toInt().coerceIn(0, 255)
+                    c.drawCircle(cx, cy, core * 0.9f + (r - core * 0.9f) * p, ringPaint)
+                }
+                val beat = 1f + 0.045f * sin(t * 2f * PI.toFloat() * pulse)
+                drawNeuron(c, cx, cy, core * 0.95f * beat * (1f + lv * 0.08f))
             }
         }
         postInvalidateOnAnimation()

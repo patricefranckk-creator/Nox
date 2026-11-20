@@ -60,6 +60,15 @@ Le modèle ne change pas : Gemma 4 E2B (vitesse) ou E4B (qualité). Tout le rest
 - **Pilotage des applis** (accessibilité) et **lecture des notifications**, avec confirmation avant toute action sensible.
 - **Centre des autorisations** au premier lancement (et Menu › Autorisations) : micro, notifications, contacts, agenda, pilotage, notifications, bouton power, batterie sans limite.
 
+## Nox 2.3 — chat épuré, bibliothèque d'abord, internet, pilotage
+
+- **Chat épuré** : ta question dans une bulle, la réponse de Nox en texte simple. Plus de relances ni de numéros ; dessous, une seule ligne grise pour les sources (livre : bibliothèque, globe : internet) et une pour ce que Nox a fait. Appui long sur un message : copier, relire, modifier, voir les sources.
+- **Bibliothèque d'abord** : pour une question de connaissances, si un passage est très pertinent, Nox l'affiche directement, sans solliciter le modèle. « Plus de détails », « développe », « résume »… : le modèle développe à partir des passages.
+- **Internet** : « cherche sur internet / sur le net / sur la toile / sur le web… » → DuckDuckGo (secours Wikipédia), texte des meilleures pages, puis Nox répond avec ses mots ; les sites sont dans la ligne grise. Aussi à la voix (outil « internet »).
+- **Pilotage** : Nox mène la tâche dans l'appli (ouvrir, lire l'écran, toucher, écrire, défiler) et demande dans le chat avant d'envoyer, appeler, payer ou supprimer.
+- **Style** : bleu nuit, fenêtres et menus refaits (boutons pleine largeur, lignes avec pastilles), mode vocal réduit au neurone, écran de démarrage avec la mention © Patrice KOEHLOFER.
+- Réglages › Bibliothèque & web : « Répondre d'abord depuis la bibliothèque » et « Recherche sur internet ».
+
 ## Contenu de la bibliothèque (RAG)
 
 Menu › Connaissances › **Contenu de la bibliothèque** (ou le bouton « Voir le contenu » du panneau Bibliothèque, ou un favori « Contenu RAG ») :

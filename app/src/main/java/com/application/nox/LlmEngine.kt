@@ -224,8 +224,11 @@ class LlmEngine(
             sb.append("\n\nTu agis vraiment sur le téléphone grâce à tes outils. Dès qu'on te demande une action ou une info du téléphone ")
                 .append("(heure, minuteur, rappel, liste, musique, appel, SMS, trajet, appli, réglage, agenda…), appelle l'outil au lieu de répondre de tête. ")
                 .append("Tout calcul passe par « calculer ». Pour une question de connaissances (définition, histoire, santé, pratique…) ou si l'utilisateur évoque quelque chose qu'il t'a déjà dit, noté ou importé, cherche d'abord dans « bibliotheque ». ")
-                .append("Pour agir dans une autre appli (WhatsApp, Gmail, réglages…), enchaîne : « ouvrir » l'appli, « ecran » lire, puis toucher/écrire, en relisant l'écran après chaque geste. ")
-                .append("Avant d'envoyer, payer ou supprimer quoi que ce soit, demande confirmation à l'utilisateur. ")
+                .append("Pour piloter une autre appli (WhatsApp, Gmail, YouTube, réglages…), mène la tâche jusqu'au bout tout seul : « ouvrir » l'appli, « ecran » lire, ")
+                .append("puis toucher, écrire, faire défiler, revenir, en relisant l'écran après chaque geste et en corrigeant si besoin. ")
+                .append("Juste avant d'envoyer, d'appeler, de payer ou de supprimer, arrête-toi et demande dans le chat, en une phrase, si tu peux le faire en résumant ce qui va partir ; ")
+                .append("à « oui », « vas-y » ou « envoie », termine avec confirme=true ; à « non » ou « annule », n'envoie rien. ")
+                .append("Si l'utilisateur demande de chercher sur internet, le net, la toile ou le web, utilise « internet » puis réponds avec tes mots, sans URL. ")
                 .append("Pour les messages reçus, utilise « notifications ». ")
                 .append("Après une action, confirme en une phrase naturelle, sans détailler l'outil.")
         }
@@ -303,10 +306,18 @@ class LlmEngine(
      * Message texte. La bibliothèque est interrogée d'abord (quelques ms) : si des extraits nettement
      * pertinents existent, ils sont glissés devant le message — Gemma répond avec, sans appel d'outil.
      */
-    fun send(text: String, history: List<ChatMsg>, l: StreamListener, image: ByteArray? = null) {
+    fun send(text: String, history: List<ChatMsg>, l: StreamListener, image: ByteArray? = null,
+             context: String? = null, contextTitles: List<String>? = null) {
         if (busy) return
         busy = true
         worker.execute {
+            if (context != null) {
+                lastRagMs = 0; lastRagHits = 0
+                if (!contextTitles.isNullOrEmpty()) post { l.onContext(contextTitles) }
+                val full = context + "\nMessage de l'utilisateur : " + text
+                submitNow(Message.user(full), full.length, null, history, l, "texte")
+                return@execute
+            }
             val ragClock = NoxLog.chrono()
             val hits = try {
                 if (prefs.ragAuto) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()

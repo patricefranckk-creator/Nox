@@ -36,6 +36,7 @@ object Nox {
         library = Library(app, store)
         skills = Skills(app, library)
         skills.onUsed = { label -> ui?.onToolUsed(label) }
+        skills.onSources = { list -> ui?.onSources(list) }
         skills.askPermission = { perm -> ui?.requestPermissions(arrayOf(perm), MainActivity.REQ_PERM) }
         engine = LlmEngine(app, prefs, store, skills, library)
         messages.addAll(chats.load())

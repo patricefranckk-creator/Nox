@@ -49,8 +49,6 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(a.pillButton("Personnalité d'origine", filled = false) { persona.setText(Prefs.DEFAULT_PERSONA) }
             .apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(8) } })
 
-        val sugg = switch("Relances suggérées sous chaque réponse", p.suggestions)
-        body.addView(sugg)
         val tempLabel = label("")
         body.addView(tempLabel)
         val temp = seek(0, 150, (p.temperature * 100).toInt()) { v ->
@@ -59,6 +57,13 @@ class SettingsDialog(private val a: MainActivity) {
             }
         }
         body.addView(temp)
+
+        // ---------------- Bibliothèque & web
+        body.addView(a.sectionTitle("Bibliothèque & web"))
+        val ragFirst = switch("Répondre d'abord depuis la bibliothèque (sans solliciter le modèle)", p.ragFirst)
+        body.addView(ragFirst)
+        val web = switch("Recherche sur internet (« cherche sur le net… »)", p.webSearch)
+        body.addView(web)
 
         // ---------------- Voix
         body.addView(a.sectionTitle("Voix"))
@@ -149,9 +154,8 @@ class SettingsDialog(private val a: MainActivity) {
                 p.userName = name.text.toString().trim()
                 p.persona = persona.text.toString().trim().ifBlank { Prefs.DEFAULT_PERSONA }
                 p.temperature = temp.progress / 100f
-                val oldSugg = p.suggestions
-                p.suggestions = sugg.isChecked
-                if (oldSugg != p.suggestions) changedPrompt = true
+                p.ragFirst = ragFirst.isChecked
+                p.webSearch = web.isChecked
                 p.autoSpeak = autoSpeak.isChecked
                 p.handsFree = handsFree.isChecked
                 commitVoice()

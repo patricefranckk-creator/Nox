@@ -210,29 +210,29 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         gaugeBtn.addView(gaugeIcon, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
         gaugeBtn.addView(View(this).apply { background = Ui.rounded(0xFF5FD39A.toInt(), dp(4).toFloat()) },
             FrameLayout.LayoutParams(dp(8), dp(8), Gravity.TOP or Gravity.END).apply { topMargin = dp(6); marginEnd = dp(6) })
-        header.addView(gaugeBtn, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(gaugeBtn, LinearLayout.LayoutParams(dp(44), dp(44)))
         styleGaugeButton(false)
 
         muteIcon = NoxDialog.icon(this, "ic_volume", Ui.TEXT, 24)
         val muteBtn = FrameLayout(this).apply {
-            background = Ui.ripple(Ui.rounded(Ui.SURFACE, dp(15).toFloat()))
+            background = Ui.ripple(Ui.rounded(Ui.SURFACE, dp(14).toFloat(), Ui.STROKE, dp(1)))
             setOnClickListener { toggleMute() }
             addView(muteIcon, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
         }
-        header.addView(muteBtn, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(10) })
+        header.addView(muteBtn, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(10) })
         styleMute()
         col.addView(header)
+        col.addView(View(this).apply { setBackgroundColor(0xFF141B2B.toInt()) }, LinearLayout.LayoutParams(-1, dp(1)))
 
         // ---- Le fil : ligne verticale fixe, tours de parole par-dessus
         scroll = ScrollView(this).apply {
             isFillViewport = true
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
-            background = TurnView.Timeline(dp(47).toFloat(), dp(2).toFloat())
         }
         list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(40), dp(4), 0, dp(12))
+            setPadding(0, dp(10), 0, dp(12))
         }
         scroll.addView(list)
         col.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -253,23 +253,29 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         })
         col.addView(attachRow)
 
-        // ---- Bas : photo, galerie, saisie, micro
+        // ---- Bas : photo (appui long : galerie), champ arrondi, gros bouton micro
+        col.addView(View(this).apply { setBackgroundColor(0xFF141B2B.toInt()) }, LinearLayout.LayoutParams(-1, dp(1)))
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), dp(14), dp(10))
+            setPadding(dp(14), dp(10), dp(14), dp(14))
         }
-        bar.addView(View(this).apply { setBackgroundColor(Ui.TIMELINE) }, LinearLayout.LayoutParams(dp(2), dp(46)).apply { marginStart = dp(46); marginEnd = dp(4) })
-        bar.addView(barIcon("ic_camera", "Prendre une photo", 30) { takePhoto() })
-        bar.addView(barIcon("ic_gallery", "Choisir une image", 30) { pickImage() })
+        bar.addView(FrameLayout(this).apply {
+            contentDescription = "Prendre une photo (appui long : choisir une image)"
+            background = Ui.ripple(Ui.rounded(Ui.SURFACE, dp(14).toFloat(), Ui.STROKE, dp(1)))
+            addView(NoxDialog.icon(this@MainActivity, "ic_camera", Ui.MUTED, 20), FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER))
+            setOnClickListener { takePhoto() }
+            setOnLongClickListener { pickImage(); true }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(10) })
         input = EditText(this).apply {
-            hint = "ou écris ici…"
+            hint = "Demande à Nox…"
             setHintTextColor(0xFF6E7891.toInt())
             setTextColor(Ui.TEXT)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            typeface = Ui.BOLD
-            background = null
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15.5f)
+            typeface = Ui.MEDIUM
+            background = Ui.rounded(Ui.SURFACE, dp(24).toFloat(), Ui.STROKE, dp(1))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            minHeight = dp(48)
             maxLines = 5
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             imeOptions = EditorInfo.IME_ACTION_SEND
@@ -280,12 +286,18 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             })
         }
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-        val actionBtn = barIcon("ic_mic", "Parler", 28) { onAction() }
+        val actionBtn = ImageView(this).apply {
+            setImageResource(resources.getIdentifier("ic_mic", "drawable", packageName))
+            setColorFilter(0xFF08111F.toInt())
+            contentDescription = "Parler"
+            val pad = dp(14)
+            setPadding(pad, pad, pad, pad)
+            background = Ui.ripple(Ui.rounded(Ui.ACCENT, dp(26).toFloat()), 0x33000000)
+            setOnClickListener { onAction() }
+        }
         actionIcon = actionBtn
-        bar.addView(actionBtn)
+        bar.addView(actionBtn, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginStart = dp(10) })
         col.addView(bar)
-        col.addView(View(this).apply { setBackgroundColor(0xFF2A3346.toInt()) },
-            LinearLayout.LayoutParams(-1, dp(2)).apply { marginStart = dp(6); marginEnd = dp(6); bottomMargin = dp(10) })
 
         // Bord à bord (Android 15+) : on respecte barres système et clavier
         root.setOnApplyWindowInsetsListener { v, insets ->
@@ -310,7 +322,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     private fun styleGaugeButton(open: Boolean) {
-        gaugeBtn.background = Ui.ripple(Ui.rounded(if (open) Ui.SURFACE_HI else Ui.SURFACE, dp(15).toFloat()))
+        gaugeBtn.background = Ui.ripple(Ui.rounded(if (open) Ui.SURFACE_HI else Ui.SURFACE, dp(14).toFloat(), Ui.STROKE, dp(1)))
         gaugeIcon.setColorFilter(if (open) Ui.ACCENT else Ui.TEXT)
     }
 
@@ -328,27 +340,54 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         toast(if (prefs.autoSpeak) "Nox lit ses réponses à voix haute" else "Voix coupée : Nox répond par écrit")
     }
 
-    /** Écran de démarrage de Lia : le neurone sur son halo, le nom, la version. */
+    /** Écran de démarrage : le neurone sur fond de nuit, le nom, et la mention du créateur. */
     private fun showSplash() {
         val decor = window.decorView as FrameLayout
-        val splash = FrameLayout(this).apply { setBackgroundColor(0xFF1A1B2E.toInt()); isClickable = true }
+        val splash = FrameLayout(this).apply {
+            background = android.graphics.drawable.GradientDrawable().apply {
+                gradientType = android.graphics.drawable.GradientDrawable.RADIAL_GRADIENT
+                colors = intArrayOf(0xFF120A2A.toInt(), 0xFF020409.toInt())
+                gradientRadius = resources.displayMetrics.heightPixels * 0.55f
+                setGradientCenter(0.5f, 0.42f)
+            }
+            isClickable = true
+        }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
         val n = NeuronView(this, NeuronView.Style.SPLASH)
-        col.addView(n, LinearLayout.LayoutParams(dp(170), dp(170)))
+        col.addView(n, LinearLayout.LayoutParams(dp(190), dp(190)))
         col.addView(TextView(this).apply {
-            text = "Nox"; setTextColor(0xFFFFFFFF.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f); typeface = Ui.BOLD
-            letterSpacing = 0.02f; gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(18) })
+            text = "Nox"; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 40f); typeface = Ui.BLACK
+            letterSpacing = 0.03f; gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(20) })
+        col.addView(TextView(this).apply {
+            text = "réveil du modèle…"; setTextColor(0xFF8E97AB.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Ui.MEDIUM
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+        val track = FrameLayout(this).apply { background = Ui.rounded(0xFF1A2236.toInt(), dp(2).toFloat()); clipChildren = true }
+        val bar = View(this).apply { background = Ui.rounded(0xFFA855F7.toInt(), dp(2).toFloat()) }
+        track.addView(bar, FrameLayout.LayoutParams(dp(48), dp(3)))
+        col.addView(track, LinearLayout.LayoutParams(dp(120), dp(3)).apply { topMargin = dp(22) })
+        bar.translationX = -dp(48).toFloat()
+        val loading = android.animation.ObjectAnimator.ofFloat(bar, "translationX", -dp(48).toFloat(), dp(120).toFloat()).apply {
+            duration = 1300; repeatCount = android.animation.ValueAnimator.INFINITE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+        }.start()
         splash.addView(col, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
-        splash.addView(TextView(this).apply {
-            text = "Version ${AppInfo.version(this@MainActivity)}"
-            setTextColor(0x73FFFFFF); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); gravity = Gravity.CENTER
-        }, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(48) })
+        val foot = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        foot.addView(TextView(this).apply {
+            text = "© ${java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)} Patrice KOEHLOFER · Tous droits réservés"
+            setTextColor(0xFF8E97AB.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f); typeface = Ui.MEDIUM; gravity = Gravity.CENTER
+        })
+        foot.addView(TextView(this).apply {
+            text = "v${AppInfo.version(this@MainActivity)} · 100 % sur ton téléphone"
+            setTextColor(0xFF5A6378.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f); gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
+        splash.addView(foot, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(40) })
         decor.addView(splash, FrameLayout.LayoutParams(-1, -1))
         n.scaleX = 0.6f; n.scaleY = 0.6f; n.alpha = 0f
         n.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(650).start()
         main.postDelayed({
-            splash.animate().alpha(0f).setDuration(320).withEndAction { decor.removeView(splash) }.start()
+            splash.animate().alpha(0f).setDuration(320).withEndAction { loading.cancel(); decor.removeView(splash) }.start()
         }, 1400)
     }
 
@@ -363,6 +402,19 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             input.setSelection(input.text.length)
             input.requestFocus()
             getSystemService(InputMethodManager::class.java).showSoftInput(input, 0)
+        }
+        override fun openSources(m: ChatMsg) {
+            if (m.sources.isEmpty()) return
+            val body = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+            m.sources.forEach { s ->
+                val url = TurnView.sourceUrl(s)
+                body.addView(NoxDialog.row(this@MainActivity, if (url != null) "🌐" else "📚", TurnView.sourceTitle(s), true,
+                    sub = url?.let { TurnView.domain(it) } ?: "Ta bibliothèque") {
+                    if (url != null) try { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } catch (_: Exception) { toast("Aucun navigateur") }
+                    else LibraryExplorer(this@MainActivity).show()
+                })
+            }
+            NoxDialog.sheet(this@MainActivity).setTitle("Sources").setView(body).show()
         }
         override fun quickReply(text: String) {
             if (engine.busy) return
@@ -404,7 +456,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     private fun refreshAction() {
-        val generating = engine.busy || voiceOut.speaking
+        val generating = engine.busy || routing || voiceOut.speaking
         val (icon, desc) = when {
             generating -> "ic_stop" to "Arrêter"
             input.text.isNotBlank() || pendingImage != null -> "ic_send" to "Envoyer"
@@ -412,6 +464,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         }
         actionIcon.setImageResource(resources.getIdentifier(icon, "drawable", packageName))
         actionIcon.contentDescription = desc
+    }
+
+    fun onSources(list: List<String>) {
+        streamingView?.setSources(list)
+        scrollToEnd()
     }
 
     fun onToolUsed(label: String) {
@@ -506,6 +563,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         else listenWhenReady = true
     }
 
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (::voicePage.isInitialized && voicePage.isOpen) closeVoicePage() else super.onBackPressed()
+    }
+
     fun closeVoicePage() {
         if (listeningNow) { stopListening(); if (!engine.busy) setMode(NeuronView.State.IDLE, idleHint()) }
         listenWhenReady = false
@@ -541,7 +604,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     /** Un tour de parole complet : tour utilisateur → réflexion → réponse en flux (+ voix). */
     private fun runTurn(text: String?, wav: List<ByteArray>?, ms: Long, image: ByteArray? = null) {
         if (!engine.ready) { toast(if (Nox.loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
-        if (engine.busy) return
+        if (engine.busy || routing) return
         stopListening()
         voiceOut.stop()
 
@@ -589,7 +652,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 if (reply.text.isBlank()) reply.text = "(silence)"
                 view.render(); view.refreshFooter()
                 statsLine.text = stats
-                if (prefs.rememberChats && stats != "interrompu") library.addExchange(userMsg.text.removePrefix("🎙 ").removePrefix("📷 "), reply.text)
+                if (prefs.rememberChats && stats != "interrompu" && !stats.startsWith(LIBRARY_ANSWER)) library.addExchange(userMsg.text.removePrefix("🎙 ").removePrefix("📷 "), reply.text)
                 finishTurn(speak)
             }
 
@@ -599,8 +662,71 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 finishTurn(speak)
             }
         }
-        if (wav != null) engine.sendAudio(wav, ms, prior, listener) else engine.send(text ?: "", prior, listener, image)
+        when {
+            wav != null -> { lastLibrary = null; engine.sendAudio(wav, ms, prior, listener) }
+            image != null || text == null -> { lastLibrary = null; engine.send(text ?: "", prior, listener, image) }
+            else -> route(text, prior, view, listener)
+        }
         refreshAction()
+    }
+
+    /** Dernière réponse tirée de la bibliothèque (question + passages), pour « plus de détails ». */
+    private var lastLibrary: Pair<String, List<Library.Hit>>? = null
+    @Volatile private var routing = false
+
+    /** Aiguillage d'un message écrit : internet, « plus de détails », bibliothèque d'abord, ou le modèle. */
+    private fun route(text: String, prior: List<ChatMsg>, view: TurnView, l: LlmEngine.StreamListener) {
+        routing = true
+        Thread {
+            val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l); refreshAction() } }
+            try {
+                val web = if (prefs.webSearch) WebSearch.queryOf(text) else null
+                when {
+                    web != null -> {
+                        main.post { setMode(NeuronView.State.THINKING, "Recherche sur internet…") }
+                        val results = WebSearch.search(web)
+                        main.post {
+                            routing = false
+                            lastLibrary = null
+                            if (results.isEmpty()) {
+                                l.onError("Pas de résultat sur internet pour « $web ». Vérifie la connexion.")
+                            } else {
+                                view.setSources(results.take(5).map { it.title + TurnView.SEP + it.url })
+                                engine.send(text, prior, l, null, WebSearch.contextBlock(web, results))
+                            }
+                            refreshAction()
+                        }
+                    }
+                    lastLibrary != null && Router.isMoreDetails(text) -> {
+                        val (q, first) = lastLibrary!!
+                        val hits = (first + library.search(q, k = 6)).distinctBy { it.chunk.id }.take(6)
+                        main.post {
+                            routing = false
+                            view.setSources(hits.filter { !it.chunk.source.startsWith("chat:") }.map { it.chunk.title }.distinct())
+                            engine.send("Développe en détail : $q", prior, l, null, library.contextBlock(hits, 3200))
+                            refreshAction()
+                        }
+                    }
+                    prefs.ragFirst && Router.isKnowledgeQuestion(text) -> {
+                        val clock = NoxLog.chrono()
+                        val hits = library.search(text, k = 4, strict = true)
+                        val answer = Router.directAnswer(hits)
+                        if (answer == null) toModel() else main.post {
+                            routing = false
+                            lastLibrary = text to hits
+                            NoxLog.p("RAG", "Réponse directe depuis la bibliothèque en ${clock.ms()} ms : ${hits.first().chunk.title.take(40)}")
+                            view.setSources(hits.filter { !it.chunk.source.startsWith("chat:") }.map { it.chunk.title }.distinct())
+                            l.onChunk(answer)
+                            l.onDone("$LIBRARY_ANSWER · ${clock.ms()} ms")
+                        }
+                    }
+                    else -> toModel()
+                }
+            } catch (t: Throwable) {
+                NoxLog.e("ROUTE", "Aiguillage impossible, passage au modèle", t)
+                toModel()
+            }
+        }.start()
     }
 
     private fun finishTurn(spoken: Boolean) {
@@ -887,6 +1013,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
     companion object {
+        /** Marque des réponses tirées directement de la bibliothèque (ligne de stats). */
+        const val LIBRARY_ANSWER = "bibliothèque"
         /** Envoyé par Freekipedia (« Envoyer à Nox ») avec le fichier .db en données. */
         const val ACTION_IMPORT_FREEKIPEDIA = "com.application.nox.IMPORTER_FREEKIPEDIA"
         const val EXTRA_VOICE = "com.application.nox.VOICE"

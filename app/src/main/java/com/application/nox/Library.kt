@@ -33,7 +33,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         val terms: List<String> by lazy { Text.terms(title + " " + text) }
     }
 
-    data class Hit(val chunk: Chunk, val score: Double, val why: String)
+    data class Hit(val chunk: Chunk, val score: Double, val why: String, val cos: Double = 0.0, val bm25: Double = 0.0)
 
     private val db = Db(ctx)
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "nox-rag").apply { priority = Thread.NORM_PRIORITY - 1 } }
@@ -387,7 +387,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             val b = bm[e.key] ?: 0.0
             val s = cos[e.key] ?: 0.0
             val relevant = if (strict) (s >= COS_STRONG || b >= BM25_STRONG) else (s >= COS_WEAK || b > 0.0)
-            if (!relevant) null else Hit(c, e.value, if (s > 0) String.format(Locale.ROOT, "sens %.2f", s) else "mots-clés")
+            if (!relevant) null else Hit(c, e.value, if (s > 0) String.format(Locale.ROOT, "sens %.2f", s) else "mots-clés", s, b)
         }.take(k)
     }
 

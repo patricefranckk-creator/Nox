@@ -95,10 +95,18 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("max_listen", 90)
         set(v) = sp.edit().putInt("max_listen", v).apply()
 
-    /** Relances proposées sous chaque réponse. */
-    var suggestions: Boolean
-        get() = sp.getBoolean("suggestions", true)
-        set(v) = sp.edit().putBoolean("suggestions", v).apply()
+    /** Relances proposées sous chaque réponse : retirées du chat épuré. */
+    val suggestions: Boolean get() = false
+
+    /** Répondre d'abord avec les passages de la bibliothèque, sans solliciter le modèle. */
+    var ragFirst: Boolean
+        get() = sp.getBoolean("rag_first", true)
+        set(v) = sp.edit().putBoolean("rag_first", v).apply()
+
+    /** « cherche sur internet… » : recherche web puis réponse écrite par Nox. */
+    var webSearch: Boolean
+        get() = sp.getBoolean("web_search", true)
+        set(v) = sp.edit().putBoolean("web_search", v).apply()
 
     var voiceName: String
         get() = sp.getString("voice", "") ?: ""
