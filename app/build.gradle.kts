@@ -26,10 +26,20 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }   // ton Snapdragon = ARM64 uniquement
     }
 
+    // Clé fixe : chaque nouvelle version s'installe par-dessus la précédente sans « conflit de package ».
+    signingConfigs {
+        create("nox") {
+            storeFile = rootProject.file("signature/nox.keystore")
+            storePassword = "noxnoxnox"
+            keyAlias = "nox"
+            keyPassword = "noxnoxnox"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("nox")
         }
     }
 
