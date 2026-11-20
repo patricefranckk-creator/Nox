@@ -104,7 +104,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
     private fun embed(text: String, query: Boolean): FloatArray? {
         val e = embedder ?: return null
-        val prefix = if (query) "task: search query | text: " else "task: search result | text: "
+        val prefix = if (query) QUERY_PREFIX else DOC_PREFIX
         return try {
             synchronized(embedLock) {
                 val v = e.computeEmbedding(listOf(InputData.Text(prefix + text.trim())), EmbeddingOptions(normalize = true)).embedding
@@ -187,13 +187,15 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
     // ================================================================ Freekipedia
 
-    data class FkResult(val fiches: Int, val passages: Int, val nouvelles: Int, val maj: Int, val info: String)
+    data class FkResult(val fiches: Int, val passages: Int, val nouvelles: Int, val maj: Int, val info: String, val vecteurs: Int = 0)
 
     /**
-     * Intègre un fichier produit par Freekipedia (« lia_maj_….db » ou « lia_base_complete_….db »).
-     * Même logique que l'IntegrateurMaj de Lia : chaque fiche remplace sa version précédente (idempotent).
-     * Les vecteurs e5 de Freekipedia ne sont pas compatibles avec EmbeddingGemma : les passages sont
-     * revectorisés ici, en tâche de fond.
+     * Intègre un fichier produit par Freekipedia, ancien format (« lia_maj_….db », tables fiches + chunks)
+     * ou format 3 (« lia_memoire_….db », tables fiches + passages). Chaque fiche remplace sa version
+     * précédente (idempotent).
+     * Si le fichier contient la table « nox_passages » calculée avec le même modèle et le même préfixe que
+     * Nox (EmbeddingGemma 2, voir [DOC_PREFIX]), les vecteurs sont repris tels quels ; sinon les passages
+     * sont vectorisés ici, en tâche de fond.
      */
     fun importFreekipedia(file: File, onDone: (FkResult?, String?) -> Unit) {
         worker.execute {
@@ -203,37 +205,61 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                 val src = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
                 try {
                     fun has(t: String) = src.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?", arrayOf(t)).use { it.moveToFirst() }
-                    require(has("fiches") && has("chunks")) { "ce fichier n'est pas une mise à jour Freekipedia" }
+                    val v3 = has("passages")
+                    require(has("fiches") && (v3 || has("chunks"))) { "ce fichier n'est pas un fichier Freekipedia" }
                     val meta = HashMap<String, String>()
                     if (has("meta")) src.rawQuery("SELECT cle, valeur FROM meta", null).use { c -> while (c.moveToNext()) meta[c.getString(0)] = c.getString(1) ?: "" }
+                    val noxVectors = v3 && has("nox_passages") && meta["nox_format"] == NOX_FORMAT &&
+                        meta["nox_modele"] == store.embedSpec.file && meta["nox_prefixe"] == DOC_PREFIX
+                    if (v3 && has("nox_passages") && !noxVectors)
+                        NoxLog.w("RAG", "Vecteurs Nox du fichier ignorés (modèle ${meta["nox_modele"]}, préfixe « ${meta["nox_prefixe"]} ») : recalcul")
                     val existing = synchronized(lock) { chunks.map { it.source }.filter { it.startsWith("fk:") }.toHashSet() }
                     val fiches = ArrayList<Array<String?>>()
-                    src.rawQuery("SELECT uid, titre, source, licence, url FROM fiches", null).use { c ->
+                    val licence = if (v3) "provider" else "licence"
+                    src.rawQuery("SELECT uid, titre, source, $licence, url FROM fiches", null).use { c ->
                         while (c.moveToNext()) fiches += arrayOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))
                     }
-                    var passages = 0; var nouvelles = 0; var maj = 0
+                    val passagesSql = when {
+                        noxVectors -> "SELECT p.texte, n.titre, n.embedding FROM passages p LEFT JOIN nox_passages n ON n.passage_id = p.id WHERE p.fiche_uid = ? ORDER BY p.ordre"
+                        v3 -> "SELECT texte, NULL, NULL FROM passages WHERE fiche_uid = ? ORDER BY ordre"
+                        else -> "SELECT texte, NULL, NULL FROM chunks WHERE fiche_uid = ? ORDER BY ordre"
+                    }
+                    var passages = 0; var nouvelles = 0; var maj = 0; var vecteurs = 0
                     val w = db.writableDatabase
                     w.beginTransaction()
                     try { for (f in fiches) {
                         val uid = f[0] ?: continue
-                        val parts = ArrayList<String>()
-                        src.rawQuery("SELECT texte FROM chunks WHERE fiche_uid = ? ORDER BY ordre", arrayOf(uid)).use { c ->
-                            while (c.moveToNext()) c.getString(0)?.takeIf { it.isNotBlank() }?.let { parts += it }
+                        val texts = ArrayList<String>()
+                        val vecs = ArrayList<FloatArray?>()
+                        var noxTitle: String? = null
+                        src.rawQuery(passagesSql, arrayOf(uid)).use { c ->
+                            while (c.moveToNext()) {
+                                val t = c.getString(0)
+                                if (t.isNullOrBlank()) continue
+                                if (noxTitle == null) noxTitle = c.getString(1)
+                                texts += t
+                                vecs += if (c.isNull(2)) null else toFloats(c.getBlob(2))
+                            }
                         }
                         val source = "fk:$uid"
                         if (source in existing) maj++ else nouvelles++
                         removeSourceNow(source, rebuild = false)
-                        val origin = listOfNotNull(f[2], f[3]).filter { it.isNotBlank() }.joinToString(", ")
-                        val title = (f[1] ?: "Fiche") + if (origin.isNotEmpty()) " ($origin)" else ""
-                        passages += insert(source, title, parts, rebuild = false)
+                        val title = noxTitle ?: if (v3) {
+                            (f[1] ?: "Fiche") + (f[3]?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+                        } else {
+                            val origin = listOfNotNull(f[2], f[3]).filter { it.isNotBlank() }.joinToString(", ")
+                            (f[1] ?: "Fiche") + if (origin.isNotEmpty()) " ($origin)" else ""
+                        }
+                        vecteurs += vecs.count { it != null }
+                        passages += insert(source, title, texts, rebuild = false, vecs = vecs)
                     }
                         w.setTransactionSuccessful()
                     } finally { w.endTransaction() }
                     synchronized(lock) { rebuildStats() }
                     val info = listOfNotNull(meta["date"]?.let { "du $it" }, meta["producteur"],
-                        if (meta["complet"] == "1") "base complète" else "mise à jour").joinToString(" · ")
-                    val r = FkResult(fiches.size, passages, nouvelles, maj, info)
-                    NoxLog.p("RAG", "Freekipedia intégré en ${clock.ms()} ms : ${r.fiches} fiches ($nouvelles nouvelles, $maj remplacées), $passages passages · $info")
+                        if (v3) meta["requete"]?.let { "« $it »" } else if (meta["complet"] == "1") "base complète" else "mise à jour").joinToString(" · ")
+                    val r = FkResult(fiches.size, passages, nouvelles, maj, info, vecteurs)
+                    NoxLog.p("RAG", "Freekipedia intégré en ${clock.ms()} ms : ${r.fiches} fiches ($nouvelles nouvelles, $maj remplacées), $passages passages, $vecteurs vecteurs repris · $info")
                     main.post { onDone(r, null) }
                 } finally {
                     src.close()
@@ -261,11 +287,13 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         }
     }
 
-    private fun insert(source: String, title: String, parts: List<String>, rebuild: Boolean = true): Int {
+    private fun insert(source: String, title: String, parts: List<String>, rebuild: Boolean = true, vecs: List<FloatArray?>? = null): Int {
         val now = System.currentTimeMillis()
-        val added = parts.filter { it.isNotBlank() }.map { t ->
-            val id = db.insert(source, title, t, now)
-            Chunk(id, source, title, t, now, null)
+        val added = parts.indices.filter { parts[it].isNotBlank() }.map { i ->
+            val t = parts[i]
+            val v = vecs?.getOrNull(i)
+            val id = db.insert(source, title, t, now, v)
+            Chunk(id, source, title, t, now, v)
         }
         synchronized(lock) { chunks.addAll(added); if (rebuild) rebuildStats() }
         return added.size
@@ -496,6 +524,19 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         /** Voix ↔ texte : les scores croisés sont plus bas que texte ↔ texte. */
         const val COS_AUDIO = 0.30
         const val BM25_STRONG = 4.0
+
+        /**
+         * Préfixes EmbeddingGemma de la bibliothèque. Freekipedia (ModeleNox) utilise exactement le même
+         * préfixe document et le même texte « titre + saut de ligne + passage » : ses vecteurs sont repris tels quels.
+         */
+        const val DOC_PREFIX = "task: search result | text: "
+        const val QUERY_PREFIX = "task: search query | text: "
+        const val NOX_FORMAT = "1"
+
+        fun toFloats(b: ByteArray): FloatArray {
+            val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
+            return FloatArray(b.size / 4) { bb.float }
+        }
     }
 
     // ================================================================ stockage
@@ -513,15 +554,16 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             readableDatabase.rawQuery("SELECT id, source, title, text, time, vec FROM chunks", null).use { c ->
                 while (c.moveToNext()) {
                     val blob = c.getBlob(5)
-                    out += Chunk(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4), blob?.let { toFloats(it) })
+                    out += Chunk(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getLong(4), blob?.let { Library.toFloats(it) })
                 }
             }
             return out
         }
 
-        fun insert(source: String, title: String, text: String, time: Long): Long =
+        fun insert(source: String, title: String, text: String, time: Long, vec: FloatArray? = null): Long =
             writableDatabase.insert("chunks", null, ContentValues().apply {
                 put("source", source); put("title", title); put("text", text); put("time", time)
+                if (vec != null) put("vec", toBytes(vec))
             })
 
         fun setVec(id: Long, v: FloatArray) {
@@ -538,10 +580,6 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             return bb.array()
         }
 
-        private fun toFloats(b: ByteArray): FloatArray {
-            val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
-            return FloatArray(b.size / 4) { bb.float }
-        }
     }
 }
 

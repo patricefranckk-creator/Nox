@@ -188,7 +188,7 @@ object HelpDialog {
         item("Contacts & trajets", "« Appelle Marie » · « Envoie un SMS à Paul pour dire que j'arrive » · « Emmène-moi à la gare de Pau »")
         item("Listes & mémoire", "« Ajoute du pain et du lait aux courses » · « Qu'est-ce qu'il y a sur ma liste ? » · « Retiens que je suis allergique aux noix » · « Oublie ça »")
         item("Bibliothèque", "Ajoute tes documents (Menu › Mes documents) ou partage un texte vers Nox, puis : « Qu'est-ce que disait le compte rendu sur… ? ». Avec EmbeddingGemma, même ta question parlée cherche directement dans la bibliothèque.")
-        item("Connaissances (Freekipedia)", "Exporte la mise à jour (.db) depuis Freekipedia, puis Menu › Importer Freekipedia. Nox y cherche tout seul et montre « Dans ta bibliothèque » ce qu'il a relu.")
+        item("Connaissances (Freekipedia)", "Crée le fichier dans Freekipedia (lia_memoire_….db, option « Aussi pour Nox » cochée : les vecteurs sont déjà calculés pour Nox), puis Menu › Importer Freekipedia. Nox y cherche tout seul et montre « Dans ta bibliothèque » ce qu'il a relu.")
         item("Contenu de la bibliothèque", "Menu › Contenu de la bibliothèque : toutes les fiches, documents, listes et conversations que Nox peut relire, chaque extrait tel quel, son état de vectorisation, et « Tester une recherche » pour voir ce que Nox retrouverait pour une question.")
 
         sec("L'écran")

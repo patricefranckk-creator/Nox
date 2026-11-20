@@ -35,8 +35,13 @@ class SkillsDialog(private val a: MainActivity) {
                         if (r == null) a.toast("Import Freekipedia impossible : $err")
                         else NoxDialog.Builder(a).setTitle("Freekipedia intégré")
                             .setMessage("${r.fiches} fiches (${r.nouvelles} nouvelles, ${r.maj} remplacées)\n${r.passages} passages ajoutés à la bibliothèque\n${r.info}\n\n" +
-                                if (a.library.semantic) "La vectorisation par EmbeddingGemma se fait en fond (elle se met en pause quand Nox parle)."
-                                else "Recherche par mots-clés active. Installe EmbeddingGemma 2 (◉) pour chercher aussi par le sens.")
+                                when {
+                                    r.vecteurs >= r.passages && r.passages > 0 -> "✓ Les ${r.vecteurs} vecteurs EmbeddingGemma 2 calculés par Freekipedia ont été repris tels quels : rien à recalculer." +
+                                        if (a.library.semantic) "" else "\nInstalle EmbeddingGemma 2 (◉) pour que Nox s'en serve (recherche par le sens)."
+                                    r.vecteurs > 0 -> "${r.vecteurs} vecteurs repris de Freekipedia, le reste se calcule en fond."
+                                    a.library.semantic -> "La vectorisation par EmbeddingGemma se fait en fond (elle se met en pause quand Nox parle). Coche « Aussi pour Nox » dans Freekipedia pour l'éviter."
+                                    else -> "Recherche par mots-clés active. Installe EmbeddingGemma 2 (◉) pour chercher aussi par le sens."
+                                })
                             .setPositiveButton("OK", null).show()
                     }
                 } catch (t: Throwable) {
