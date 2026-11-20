@@ -126,6 +126,8 @@ class SkillsDialog(private val a: MainActivity) {
         // ---------------- Bibliothèque (RAG)
         body.addView(a.sectionTitle("Bibliothèque (ce que Nox peut relire)"))
         body.addView(a.text(a.library.stats(), 12.5f, Ui.CYAN))
+        body.addView(a.pillButton("🔎  Voir le contenu") { LibraryExplorer(a).show() }
+            .apply { layoutParams = LinearLayout.LayoutParams(-2, a.dp(44)).apply { topMargin = a.dp(8) } })
         if (!a.library.semantic) body.addView(a.text("Astuce : installe EmbeddingGemma 2 (◉) pour une recherche par le sens, pas seulement par mots-clés.", 12f, Ui.MUTED)
             .apply { setPadding(0, a.dp(4), 0, 0) })
         val (fkFiches, fkPassages) = a.library.freekipediaStats()

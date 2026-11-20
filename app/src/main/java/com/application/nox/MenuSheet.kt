@@ -24,6 +24,7 @@ class MenuSheet(private val a: MainActivity) {
         Entry("nouvelle", "💬", "Nouvelle") { a.newConversation() },
         Entry("jauges", "📊", "Jauges") { a.gauges.open() },
         Entry("freekipedia", "🌐", "Freekipedia") { SkillsDialog.pickFreekipedia(a) },
+        Entry("contenu", "🔎", "Contenu RAG") { LibraryExplorer(a).show() },
         Entry("modeles", "🧠", "Modèles") { ModelsDialog(a).show() },
         Entry("reglages", "⚙️", "Réglages") { SettingsDialog(a).show() },
         Entry("journal", "📈", "Journal") { JournalDialog(a).show() },
@@ -56,6 +57,7 @@ class MenuSheet(private val a: MainActivity) {
             Triple("🗣️", "Assistant vocal (bouton Power)") { PermissionsDialog(a).show() },
         )
         section(body, "Connaissances",
+            Triple("🔎", "Contenu de la bibliothèque") { LibraryExplorer(a).show() },
             Triple("🌐", "Importer Freekipedia") { SkillsDialog.pickFreekipedia(a) },
             Triple("⚡", "Compétences") { SkillsDialog(a).show() },
         )

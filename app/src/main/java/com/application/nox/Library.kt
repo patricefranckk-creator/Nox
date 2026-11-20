@@ -404,6 +404,55 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         return sb.toString()
     }
 
+    // ================================================================ exploration du contenu
+
+    enum class Kind(val emoji: String, val label: String) {
+        FREEKIPEDIA("🌐", "Freekipedia"), DOC("📄", "Documents"), NOTE("📝", "Listes"), CHAT("💬", "Conversations"), OTHER("•", "Autres");
+
+        companion object {
+            fun of(source: String): Kind = when {
+                source.startsWith("fk:") -> FREEKIPEDIA
+                source.startsWith("doc:") -> DOC
+                source.startsWith("note:") -> NOTE
+                source.startsWith("chat:") -> CHAT
+                else -> OTHER
+            }
+        }
+    }
+
+    /** Une source de la bibliothèque (une fiche, un document, une liste, une journée de conversation). */
+    data class SourceInfo(val source: String, val title: String, val kind: Kind, val extracts: Int,
+                          val vectorized: Int, val chars: Int, val time: Long)
+
+    /**
+     * Toutes les sources, les plus récentes d'abord.
+     * @param query filtre facultatif sur le titre ou le texte (sans tenir compte des accents ni des majuscules).
+     */
+    fun sources(query: String = "", kind: Kind? = null): List<SourceInfo> {
+        val snapshot = synchronized(lock) { ArrayList(chunks) }
+        val q = Text.fold(query.trim())
+        return snapshot.groupBy { it.source }.mapNotNull { (source, list) ->
+            val k = Kind.of(source)
+            if (kind != null && k != kind) return@mapNotNull null
+            if (q.isNotEmpty() && list.none { Text.fold(it.title).contains(q) || Text.fold(it.text).contains(q) }) return@mapNotNull null
+            SourceInfo(source, list.first().title, k, list.size, list.count { it.vec != null },
+                list.sumOf { it.text.length }, list.maxOf { it.time })
+        }.sortedByDescending { it.time }
+    }
+
+    /** Nombre de sources par type (pour les filtres). */
+    fun kindCounts(): Map<Kind, Int> = synchronized(lock) {
+        chunks.map { it.source }.toSet().groupingBy { Kind.of(it) }.eachCount()
+    }
+
+    /** Les extraits d'une source, dans l'ordre où ils ont été ajoutés. */
+    fun extracts(source: String): List<Chunk> = synchronized(lock) {
+        chunks.filter { it.source == source }.sortedBy { it.id }
+    }
+
+    /** Dimension des vecteurs actuellement stockés (0 si aucun). */
+    fun vectorSize(): Int = synchronized(lock) { chunks.firstOrNull { it.vec != null }?.vec?.size ?: 0 }
+
     // ================================================================ infos
 
     fun documents(): List<Pair<String, Int>> = synchronized(lock) {

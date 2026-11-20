@@ -60,6 +60,14 @@ Le modèle ne change pas : Gemma 4 E2B (vitesse) ou E4B (qualité). Tout le rest
 - **Pilotage des applis** (accessibilité) et **lecture des notifications**, avec confirmation avant toute action sensible.
 - **Centre des autorisations** au premier lancement (et Menu › Autorisations) : micro, notifications, contacts, agenda, pilotage, notifications, bouton power, batterie sans limite.
 
+## Contenu de la bibliothèque (RAG)
+
+Menu › Connaissances › **Contenu de la bibliothèque** (ou le bouton « Voir le contenu » du panneau Bibliothèque, ou un favori « Contenu RAG ») :
+
+- **Toutes les sources** que Nox peut relire : fiches Freekipedia, documents, listes, conversations mémorisées. Filtres par type, recherche dans les titres et le texte (sans accents ni majuscules), nombre d'extraits, taille, date, état de vectorisation (✓ = tout est vectorisé).
+- **Le détail d'une source** : chaque extrait exactement tel que Nox le relit, vectorisé ou en attente, avec Copier et Retirer.
+- **Tester une recherche** : les extraits que Nox retrouverait pour une question, avec leur score (mots-clés, sens, fusion RRF). Contour vert = assez pertinent pour être glissé tout seul avant la réponse.
+
 ## Activer le bouton power
 
 Menu › Autorisations › **Bouton power** ouvre « Assistant numérique par défaut » : choisis **Nox**, puis active « Appui long sur le bouton marche/arrêt » (sur HONOR : Paramètres › Assistance › Bouton marche/arrêt). 
