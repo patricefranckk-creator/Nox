@@ -35,8 +35,28 @@ class SystemStats(private val ctx: Context) {
     private var lastCpuTicks = -1L
     private var lastWall = 0L
     private val cores = Runtime.getRuntime().availableProcessors()
-    private val gpuBusy = listOf("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage", "/sys/class/kgsl/kgsl-3d0/devfreq/gpu_load")
-    private val gpuFreq = listOf("/sys/class/kgsl/kgsl-3d0/gpuclk", "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq")
+    // Charge GPU : Adreno (kgsl, /sys/kernel/gpu), Mali, MediaTek. Android bloque souvent ces fichiers (SELinux).
+    private val gpuBusy = listOf(
+        "/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage", "/sys/class/kgsl/kgsl-3d0/devfreq/gpu_load",
+        "/sys/kernel/gpu/gpu_busy", "/sys/class/misc/mali0/device/utilization", "/sys/kernel/ged/hal/gpu_utilization",
+    )
+    private val gpuBusyPair = "/sys/class/kgsl/kgsl-3d0/gpubusy"
+    private val gpuFreq = listOf(
+        "/sys/class/kgsl/kgsl-3d0/gpuclk", "/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq",
+        "/sys/kernel/gpu/gpu_clock", "/sys/class/misc/mali0/device/cur_freq",
+    )
+
+    /** Vrai si au moins un fichier de charge GPU est lisible sur ce téléphone. */
+    var gpuReadable: Boolean? = null; private set
+
+    private fun gpuLoad(): Float? {
+        gpuBusy.firstNotNullOfOrNull { path ->
+            readText(path)?.trim()?.split(Regex("[\\s%]+"))?.firstOrNull()?.toFloatOrNull()?.takeIf { it in 0f..100f }
+        }?.let { return it }
+        val pair = readText(gpuBusyPair)?.trim()?.split(Regex("\\s+"))?.mapNotNull { it.toLongOrNull() }
+        if (pair != null && pair.size >= 2 && pair[1] > 0) return (pair[0] * 100f / pair[1]).coerceIn(0f, 100f)
+        return null
+    }
 
     fun sample(): Snapshot {
         val am = ctx.getSystemService(ActivityManager::class.java)
@@ -64,7 +84,8 @@ class SystemStats(private val ctx: Context) {
         val freqText = if (freqs.isEmpty()) "fréquences non lisibles" else "max ${freqs.max()} MHz · moy. ${freqs.average().toInt()} MHz"
 
         // GPU Adreno (kgsl) : lisible sur beaucoup de Snapdragon, sinon « n/d »
-        val gpu = gpuBusy.firstNotNullOfOrNull { readText(it)?.trim()?.split(" ")?.firstOrNull()?.toFloatOrNull() }
+        val gpu = gpuLoad()
+        gpuReadable = gpu != null
         val gf = gpuFreq.firstNotNullOfOrNull { readLong(it) }?.let { if (it > 10_000_000) (it / 1_000_000).toInt() else (it / 1000).toInt() }
 
         val bat = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
@@ -178,6 +199,18 @@ class GaugePanel(private val a: MainActivity, private val root: FrameLayout, pri
     private val bat = Card(a, "Batterie")
     var isOpen = false; private set
     var onChange: ((Boolean) -> Unit)? = null
+
+    /** Occupation du moteur de Nox, échantillonnée tous les 100 ms sur les 2 dernières secondes. */
+    private val busySamples = ArrayDeque<Boolean>()
+    private val busyTick = object : Runnable {
+        override fun run() {
+            if (!isOpen) return
+            busySamples.addLast(Nox.engine.busy)
+            while (busySamples.size > 20) busySamples.removeFirst()
+            handler.postDelayed(this, 100)
+        }
+    }
+    private fun busyPct(): Float = if (busySamples.isEmpty()) 0f else busySamples.count { it } * 100f / busySamples.size
     private val backCb by lazy { android.window.OnBackInvokedCallback { close() } }
 
     private val tick = object : Runnable {
@@ -222,8 +255,10 @@ class GaugePanel(private val a: MainActivity, private val root: FrameLayout, pri
         panel.visibility = View.VISIBLE
         panel.alpha = 0f; panel.translationY = -a.dp(16).toFloat()
         panel.animate().alpha(1f).translationY(0f).setDuration(200).start()
+        busySamples.clear()
         refresh()
         handler.postDelayed(tick, 1000)
+        handler.post(busyTick)
         if (android.os.Build.VERSION.SDK_INT >= 33)
             a.onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCb)
         onChange?.invoke(true)
@@ -234,6 +269,7 @@ class GaugePanel(private val a: MainActivity, private val root: FrameLayout, pri
         if (!isOpen) return
         isOpen = false
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(busyTick)
         if (android.os.Build.VERSION.SDK_INT >= 33) a.onBackInvokedDispatcher.unregisterOnBackInvokedCallback(backCb)
         scrim.visibility = View.GONE
         panel.animate().alpha(0f).translationY(-a.dp(12).toFloat()).setDuration(160).withEndAction { panel.visibility = View.GONE }.start()
@@ -247,8 +283,19 @@ class GaugePanel(private val a: MainActivity, private val root: FrameLayout, pri
         nox.set(s.noxRss * 100f / s.ramTotal, NoxLog.gb(s.noxRss), Ui.ACCENT, "sur ${NoxLog.gb(s.ramTotal)} · dont modèle ${NoxLog.gb(s.nativeHeap)}")
         cpu.set(s.noxCpuPct, "${s.noxCpuPct.toInt()} %", level(s.noxCpuPct, 60f, 85f),
             "${Runtime.getRuntime().availableProcessors()} cœurs · puce à ${s.cpuFreqPct.toInt()} %")
-        if (s.gpuPct != null) gpu.set(s.gpuPct, "${s.gpuPct.toInt()} %", 0xFF5FD39A.toInt(), "Adreno" + (s.gpuFreqMhz?.let { " · $it MHz" } ?: ""))
-        else gpu.set(null, "—", 0xFF5FD39A.toInt(), if (e.backendLabel.startsWith("GPU")) "Adreno actif · mesure bloquée par le téléphone" else "inactif (Nox tourne sur CPU)")
+        val onGpu = e.ready && e.backendLabel.startsWith("GPU")
+        val speed = NoxLog.lastTurn()?.takeIf { it.tps > 0 }?.let { String.format(Locale.FRANCE, " · dernier tour %.1f tok/s", it.tps) } ?: ""
+        when {
+            s.gpuPct != null -> gpu.set(s.gpuPct, "${s.gpuPct.toInt()} %", 0xFF5FD39A.toInt(),
+                "charge réelle" + (s.gpuFreqMhz?.let { " · $it MHz" } ?: "") + if (onGpu) " · Nox sur GPU" else " · Nox sur CPU")
+            onGpu -> {
+                val busy = busyPct()
+                gpu.set(busy, if (e.busy) "${busy.toInt()} %" else "repos", 0xFF5FD39A.toInt(),
+                    "occupé par Nox (temps de calcul)$speed · charge exacte bloquée par Android")
+            }
+            e.ready -> gpu.set(0f, "CPU", Ui.MUTED, "Nox tourne sur CPU : GPU non utilisé$speed")
+            else -> gpu.set(0f, "—", Ui.MUTED, "modèle non chargé")
+        }
         val batColor = when { s.battPct <= 15 -> Ui.DANGER; s.battPct <= 30 -> Ui.AMBER; else -> Ui.GREEN }
         bat.set(s.battPct.toFloat(), String.format(Locale.FRANCE, "%d %% · %.0f °C", s.battPct, s.battTempC), batColor,
             (if (s.charging) "en charge" else "sur batterie") + " · ${s.battMa} mA · ${s.thermal}")
@@ -266,7 +313,8 @@ class GaugePanel(private val a: MainActivity, private val root: FrameLayout, pri
             append("  Nox ${NoxLog.gb(s.noxRss)} (dont modèle/moteur ${NoxLog.gb(s.nativeHeap)})\n\n")
             append("PROCESSEUR\n")
             append("  Nox ${s.noxCpuPct.toInt()} % de la puce · ${s.cpuFreqText}\n")
-            append("  GPU : ${s.gpuPct?.let { "${it.toInt()} % de charge" } ?: "mesure bloquée par Android"}${s.gpuFreqMhz?.let { " · $it MHz" } ?: ""}\n\n")
+            append("  GPU : ${s.gpuPct?.let { "${it.toInt()} % de charge" } ?: "charge matérielle illisible (fichiers système bloqués par Android, il faudrait le root)"}${s.gpuFreqMhz?.let { " · $it MHz" } ?: ""}\n")
+            append("  Moteur : ${e.backendLabel.ifEmpty { "non chargé" }}${NoxLog.lastTurn()?.let { String.format(Locale.FRANCE, " · dernier tour %.1f tok/s sur %s", it.tps, it.backend) } ?: ""}\n\n")
             append("ÉNERGIE\n")
             append("  ${s.battPct} % · ${if (s.charging) "en charge" else "sur batterie"} · ${s.battMa} mA · ${String.format(Locale.FRANCE, "%.1f", s.battTempC)} °C\n")
             append("  Thermique : ${s.thermal}\n\n")

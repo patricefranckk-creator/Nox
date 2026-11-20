@@ -46,6 +46,9 @@ object NoxLog {
     private val main = Handler(Looper.getMainLooper())
     private val ring = ArrayDeque<Entry>()
     private val turns = ArrayDeque<Turn>()
+
+    /** Dernier tour de génération mesuré (vitesse, moteur…), ou null. */
+    fun lastTurn(): Turn? = synchronized(turns) { turns.lastOrNull() }
     private var dir: File? = null
     private var appCtx: Context? = null
     @Volatile var verbose = false
