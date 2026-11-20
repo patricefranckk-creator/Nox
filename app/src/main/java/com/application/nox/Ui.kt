@@ -14,12 +14,15 @@ import android.widget.TextView
 
 /** Petits outils pour construire l'interface en code (aucun XML de layout, aucune dépendance). */
 object Ui {
-    const val BG = 0xFF07070C.toInt()
-    const val SURFACE = 0xFF14141F.toInt()
-    const val SURFACE_HI = 0xFF1E1B3A.toInt()
-    const val STROKE = 0xFF2A2A48.toInt()
-    const val TEXT = 0xFFECEAF6.toInt()
-    const val MUTED = 0xFF8D8AA8.toInt()
+    // Palette inspirée de Lia (bleu nuit profond), avec l'accent violet de Nox
+    const val BG = 0xFF0A1120.toInt()
+    const val SURFACE = 0xFF141C30.toInt()
+    const val SURFACE_HI = 0xFF1C2542.toInt()
+    const val STROKE = 0xFF243150.toInt()
+    const val TEXT = 0xFFEAF1FB.toInt()
+    const val MUTED = 0xFF8A97B4.toInt()
+    const val USER_TEXT = 0xFFD6E4F5.toInt()
+    const val USER_TAG = 0xFFAEC3E0.toInt()
     const val ACCENT = 0xFF8B7CFF.toInt()
     const val CYAN = 0xFF4FE3FF.toInt()
     const val DANGER = 0xFFFF5F7A.toInt()

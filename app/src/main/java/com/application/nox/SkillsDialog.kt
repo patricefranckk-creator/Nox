@@ -15,6 +15,36 @@ class SkillsDialog(private val a: MainActivity) {
 
     companion object {
         const val REQ_DOC = 4343
+        const val REQ_FK = 4344
+
+        fun pickFreekipedia(a: MainActivity) {
+            @Suppress("DEPRECATION")
+            a.startActivityForResult(android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(android.content.Intent.CATEGORY_OPENABLE).setType("*/*"), REQ_FK)
+        }
+
+        /** Copie le fichier .db choisi puis l'intègre à la bibliothèque. */
+        fun importFreekipedia(a: MainActivity, uri: android.net.Uri) {
+            val prog = AlertDialog.Builder(a).setTitle("Freekipedia").setMessage("Lecture du fichier…").setCancelable(false).show()
+            Thread {
+                try {
+                    val tmp = java.io.File(a.cacheDir, "freekipedia_import.db")
+                    a.contentResolver.openInputStream(uri)?.use { i -> tmp.outputStream().use { o -> i.copyTo(o, 1 shl 16) } } ?: error("lecture impossible")
+                    a.runOnUiThread { prog.setMessage("Intégration des fiches…") }
+                    a.library.importFreekipedia(tmp) { r, err ->
+                        prog.dismiss()
+                        if (r == null) a.toast("Import Freekipedia impossible : $err")
+                        else AlertDialog.Builder(a).setTitle("Freekipedia intégré")
+                            .setMessage("${r.fiches} fiches (${r.nouvelles} nouvelles, ${r.maj} remplacées)\n${r.passages} passages ajoutés à la bibliothèque\n${r.info}\n\n" +
+                                if (a.library.semantic) "La vectorisation par EmbeddingGemma se fait en fond (elle se met en pause quand Nox parle)."
+                                else "Recherche par mots-clés active. Installe EmbeddingGemma 2 (◉) pour chercher aussi par le sens.")
+                            .setPositiveButton("OK", null).show()
+                    }
+                } catch (t: Throwable) {
+                    a.runOnUiThread { prog.dismiss(); a.toast("Import impossible : ${t.message}") }
+                }
+            }.start()
+        }
 
         /** Lit un document texte choisi par l'utilisateur et l'ajoute à la bibliothèque. */
         fun importDocument(a: MainActivity, uri: android.net.Uri) {
@@ -99,6 +129,18 @@ class SkillsDialog(private val a: MainActivity) {
         body.addView(a.text(a.library.stats(), 12.5f, Ui.CYAN))
         if (!a.library.semantic) body.addView(a.text("Astuce : installe EmbeddingGemma 2 (◉) pour une recherche par le sens, pas seulement par mots-clés.", 12f, Ui.MUTED)
             .apply { setPadding(0, a.dp(4), 0, 0) })
+        val (fkFiches, fkPassages) = a.library.freekipediaStats()
+        body.addView(a.text(if (fkFiches > 0) "🌐  Freekipedia : $fkFiches fiches · $fkPassages passages" else "🌐  Freekipedia : aucune fiche pour l'instant", 14f, Ui.TEXT).apply {
+            setPadding(a.dp(12), a.dp(9), a.dp(12), a.dp(9))
+            background = Ui.ripple(Ui.rounded(0xFF1A1630.toInt(), a.dp(12).toFloat(), Ui.STROKE, a.dp(1)))
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = a.dp(8) }
+            setOnClickListener {
+                val items = if (fkFiches > 0) arrayOf("Importer une mise à jour (.db)", "Retirer toutes les fiches Freekipedia") else arrayOf("Importer une mise à jour (.db)")
+                AlertDialog.Builder(a).setTitle("Freekipedia").setItems(items) { _, w ->
+                    if (w == 0) pickFreekipedia(a) else a.library.removeFreekipedia { render() }
+                }.show()
+            }
+        })
         val docs = a.library.documents()
         docs.forEach { (title, n) ->
             body.addView(a.text("📄  $title  ·  $n extrait${if (n > 1) "s" else ""}", 14f, Ui.TEXT).apply {

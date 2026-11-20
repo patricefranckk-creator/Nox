@@ -22,8 +22,10 @@ class AudioCapture(private val listener: Listener) {
     interface Listener {
         fun onCaptureStarted()
         fun onCaptureLevel(level: Float)
-        /** wav = fichier WAV complet, durée en ms. */
-        fun onCaptured(wav: ByteArray, durationMs: Long)
+        /** Temps écoulé depuis le début de la parole (pour afficher un compteur). */
+        fun onCaptureElapsed(speechMs: Long) {}
+        /** Clips WAV de 30 s maximum chacun (limite de l'encodeur audio de Gemma), durée totale en ms. */
+        fun onCaptured(wavs: List<ByteArray>, durationMs: Long)
         fun onCaptureNothing()
         fun onCaptureError(msg: String)
     }
@@ -35,9 +37,18 @@ class AudioCapture(private val listener: Listener) {
 
     val active get() = running
 
+    private var endSilenceMs = 2000
+    private var maxMs = 90_000
+
+    /**
+     * @param patienceMs silence à attendre avant de considérer que tu as fini.
+     * @param maxSeconds durée maximale d'un message vocal.
+     */
     @SuppressLint("MissingPermission")
-    fun start() {
+    fun start(patienceMs: Int = 2000, maxSeconds: Int = 90) {
         if (running) return
+        endSilenceMs = patienceMs.coerceIn(600, 8000)
+        maxMs = maxSeconds.coerceIn(10, 180) * 1000
         running = true
         forceStop = false
         thread = Thread({ loop() }, "nox-mic").apply { priority = Thread.MAX_PRIORITY; start() }
@@ -80,9 +91,10 @@ class AudioCapture(private val listener: Listener) {
         var speechFrames = 0
         var silenceFrames = 0
         var totalFrames = 0
-        val maxFrames = MAX_MS / FRAME_MS
+        val maxFrames = maxMs / FRAME_MS
         val waitFrames = WAIT_MS / FRAME_MS
-        val endSilence = END_SILENCE_MS / FRAME_MS
+        val endSilence = endSilenceMs / FRAME_MS
+        var lastTick = 0
 
         try {
             rec.startRecording()
@@ -116,6 +128,8 @@ class AudioCapture(private val listener: Listener) {
                 } else {
                     pcm.write(bytes)
                     silenceFrames = if (voiced) 0 else silenceFrames + 1
+                    val spoken = pcm.size() / 2 * 1000L / RATE
+                    if (spoken / 500 != lastTick.toLong()) { lastTick = (spoken / 500).toInt(); main.post { listener.onCaptureElapsed(spoken) } }
                     if (silenceFrames >= endSilence || forceStop || totalFrames > maxFrames) break
                 }
             }
@@ -132,12 +146,12 @@ class AudioCapture(private val listener: Listener) {
         if (cancelled) { NoxLog.d("OREILLE", "Écoute annulée"); return }
         val data = pcm.toByteArray()
         val ms = data.size / 2 * 1000L / RATE
-        val why = when { forceStop -> "touche de fin"; !speaking -> "aucune voix détectée"; totalFrames > maxFrames -> "limite 30 s"; else -> "silence détecté" }
+        val why = when { forceStop -> "touche de fin"; !speaking -> "aucune voix détectée"; totalFrames > maxFrames -> "limite ${maxMs / 1000} s"; else -> "silence de ${endSilenceMs} ms" }
         NoxLog.i("OREILLE", "Capture : ${ms} ms de parole sur ${totalFrames * FRAME_MS} ms · bruit de fond ${noise.toInt()} · fin : $why · " +
             "NS=${ns != null} AGC=${agc != null}")
         main.post {
             if (!speaking || ms < 400) listener.onCaptureNothing()
-            else listener.onCaptured(wav(data), ms)
+            else listener.onCaptured(split(data), ms)
         }
     }
 
@@ -151,9 +165,35 @@ class AudioCapture(private val listener: Listener) {
         const val RATE = 16_000
         private const val FRAME_MS = 30
         private const val FRAME = RATE * FRAME_MS / 1000
-        private const val MAX_MS = 30_000
-        private const val WAIT_MS = 7_000
-        private const val END_SILENCE_MS = 1_100
+        private const val WAIT_MS = 8_000
+        /** Un clip audio pour Gemma : 30 s maximum. */
+        private const val CLIP_BYTES = RATE * 2 * 30
+
+        /** Découpe la parole en clips de 30 s, en coupant de préférence sur un passage calme. */
+        fun split(pcm: ByteArray): List<ByteArray> {
+            if (pcm.size <= CLIP_BYTES) return listOf(wav(pcm))
+            val out = ArrayList<ByteArray>()
+            var start = 0
+            while (start < pcm.size) {
+                var end = minOf(start + CLIP_BYTES, pcm.size)
+                if (end < pcm.size) {
+                    // cherche dans les 3 dernières secondes la fenêtre de 100 ms la plus calme
+                    var best = end; var bestE = Double.MAX_VALUE
+                    var w = end - RATE * 2 * 3
+                    while (w + 3200 <= end) {
+                        var e = 0.0
+                        var k = w
+                        while (k < w + 3200) { val v = ((pcm[k + 1].toInt() shl 8) or (pcm[k].toInt() and 0xff)).toShort().toDouble(); e += v * v; k += 2 }
+                        if (e < bestE) { bestE = e; best = w + 1600 }
+                        w += 1600
+                    }
+                    end = best - (best - start) % 2
+                }
+                out += wav(pcm.copyOfRange(start, end))
+                start = end
+            }
+            return out
+        }
 
         fun wav(pcm: ByteArray): ByteArray {
             val out = ByteArray(44 + pcm.size)

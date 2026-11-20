@@ -33,6 +33,7 @@ class SettingsDialog(private val a: MainActivity) {
         val oldPersona = p.persona
         val oldTemp = p.temperature
         val oldName = p.userName
+        var changedPrompt = false
 
         val body = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
@@ -49,6 +50,8 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(a.pillButton("Personnalité d'origine", filled = false) { persona.setText(Prefs.DEFAULT_PERSONA) }
             .apply { layoutParams = LinearLayout.LayoutParams(-2, -2).apply { topMargin = a.dp(8) } })
 
+        val sugg = switch("Relances suggérées sous chaque réponse", p.suggestions)
+        body.addView(sugg)
         val tempLabel = label("")
         body.addView(tempLabel)
         val temp = seek(0, 150, (p.temperature * 100).toInt()) { v ->
@@ -69,6 +72,12 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(a.text("L'oreille Gemma ne marche qu'avec Gemma 4 / 3n (E2B, E4B). Sinon Nox bascule tout seul sur la reconnaissance du téléphone.",
             12f, Ui.MUTED).apply { setPadding(0, a.dp(4), 0, a.dp(6)) })
         val oldListen = p.listenMode
+        body.addView(label("Patience : silence avant que Nox réponde"))
+        val patience = radios(listOf("1200" to "1,2 s · réactif", "2000" to "2 s · normal", "3000" to "3 s · posé", "5000" to "5 s · je réfléchis en parlant"), p.patienceMs.toString())
+        body.addView(patience)
+        body.addView(label("Durée maximale d'un message vocal"))
+        val maxL = radios(listOf("30" to "30 s", "90" to "1 min 30", "180" to "3 min"), p.maxListenSec.toString())
+        body.addView(maxL)
         val autoSpeak = switch("Lire les réponses à voix haute", p.autoSpeak)
         body.addView(autoSpeak)
         val handsFree = switch("Mains libres (réécoute automatique)", p.handsFree)
@@ -132,6 +141,9 @@ class SettingsDialog(private val a: MainActivity) {
                 p.userName = name.text.toString().trim()
                 p.persona = persona.text.toString().trim().ifBlank { Prefs.DEFAULT_PERSONA }
                 p.temperature = temp.progress / 100f
+                val oldSugg = p.suggestions
+                p.suggestions = sugg.isChecked
+                if (oldSugg != p.suggestions) changedPrompt = true
                 p.autoSpeak = autoSpeak.isChecked
                 p.handsFree = handsFree.isChecked
                 commitVoice()
@@ -140,9 +152,11 @@ class SettingsDialog(private val a: MainActivity) {
                 p.vision = vision.isChecked
                 p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
                 p.listenMode = checkedTag(listen) ?: "native"
+                p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
+                p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
 
                 val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen || p.vision != oldVision
-                val reconv = p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
+                val reconv = changedPrompt || p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
                 when {
                     reload -> { a.applyLightSettings(); a.loadModel() }
                     reconv -> a.applyConversationSettings()

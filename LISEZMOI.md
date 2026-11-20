@@ -39,6 +39,14 @@ Le modèle ne change pas : Gemma 4 E2B (vitesse) ou E4B (qualité). Tout le rest
 - **Partage vers Nox** : depuis n'importe quelle appli, partage un texte → l'ajouter à la bibliothèque ou en parler.
 - **Performances** : consigne + outils + historique pré-calculés au chargement, réflexion désactivée, compactage du contexte, cascade GPU → CPU avec repli sans vue / sans oreille / sans outils plutôt que planter.
 
+## Version 2.1 « Lia »
+
+- **Fil façon Lia** : bleu nuit, pas de bulles, étiquettes TOI / NOX, réponses en police à empattements, ⧉ copier / ▶ relire sous chaque message, marqueurs « dit / lu à voix haute ».
+- **Conversation enrichie** : carte « Dans ta bibliothèque » (ce que Nox a relu), puces d'actions, relances suggérées à toucher, mémorisation proactive de ce que tu confies, salutation selon l'heure.
+- **Freekipedia** : ⋮ › Importer Freekipedia accepte les fichiers `lia_maj_….db` et `lia_base_complete_….db` (même schéma que Lia, idempotent). Les passages sont revectorisés par EmbeddingGemma 2, en pause pendant que Nox parle.
+- **Écoute longue** : patience réglable (1,2 / 2 / 3 / 5 s de silence), jusqu'à 3 min, découpée en clips de 30 s pour Gemma, compteur visible.
+- **Jauges** (⋮ ou balayage depuis le bord droit) : RAM, CPU de Nox + fréquences, GPU Adreno (si Android laisse lire), batterie (%, °C, mA), thermique, contexte, résumé des perfs.
+
 ## Gestes
 
 - **Toucher l'orbe** : parler · pendant qu'il parle ou réfléchit : l'interrompre et reprendre la parole.

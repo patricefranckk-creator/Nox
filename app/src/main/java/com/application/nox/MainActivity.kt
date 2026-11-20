@@ -43,6 +43,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private lateinit var attachRow: LinearLayout
     private lateinit var attachLabel: TextView
     private var embedTried = false
+    lateinit var gauges: GaugeDrawer
     private var voiceIn: VoiceIn? = null
     private var capture: AudioCapture? = null
 
@@ -64,7 +65,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private lateinit var statsLine: TextView
     private lateinit var orbBox: FrameLayout
 
-    private var streamingView: TextView? = null
+    private var streamingView: TurnView? = null
     private var streamingMsg: ChatMsg? = null
     private var turnFromVoice = false
     private var loading = false
@@ -80,15 +81,17 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         chats = ChatStore(this)
         library = Library(this, store)
         skills = Skills(this, library)
-        skills.onUsed = { label -> addChip(label) }
+        skills.onUsed = { label -> streamingView?.addTool(label) ?: toast(label); scrollToEnd() }
         skills.askPermission = { perm -> requestPermissions(arrayOf(perm), REQ_PERM) }
         engine = LlmEngine(this, prefs, store, skills, library)
         voiceOut = VoiceOut(this, prefs, this)
 
         window.setDecorFitsSystemWindows(false)   // bord à bord partout, on gère les marges nous-mêmes
-        setContentView(buildUi())
+        val rootView = buildUi()
+        setContentView(rootView)
+        gauges = GaugeDrawer(this, rootView as FrameLayout)
         messages.addAll(chats.load())
-        if (messages.isEmpty()) addBubble(ChatMsg(false, welcomeText()), save = false) else messages.forEach { addBubble(it, save = false, register = false) }
+        if (messages.isEmpty()) addTurn(ChatMsg(false, welcomeText()), save = false, register = false) else messages.forEach { addTurn(it, save = false, register = false) }
         scrollToEnd()
 
         askPermissions()
@@ -253,8 +256,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         val items = listOf(
             "✦  Nouvelle conversation" to { newConversation() },
             "⚡  Compétences, mémoire & bibliothèque" to { SkillsDialog(this).show() },
+            "📥  Importer Freekipedia" to { SkillsDialog.pickFreekipedia(this) },
             "◉  Modèles" to { ModelsDialog(this).show() },
             "⚙  Réglages" to { SettingsDialog(this).show() },
+            "📊  Jauges (RAM, CPU, GPU, batterie)" to { gauges.open() },
             "📈  Journal de bord" to { JournalDialog(this).show() },
             "？ Aide" to { HelpDialog.show(this) },
             "ⓘ  À propos · v${AppInfo.version(this)}" to { AboutDialog.show(this) },
@@ -264,37 +269,32 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         pm.show()
     }
 
-    private fun spacer(w: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(w), 1) }
-
-    private fun addBubble(m: ChatMsg, save: Boolean = true, register: Boolean = true): TextView {
-        if (register) messages += m
-        val tv = text(Markdown.render(m.text), 15.5f, Ui.TEXT).apply {
-            setPadding(dp(16), dp(11), dp(16), dp(11))
-            maxWidth = (resources.displayMetrics.widthPixels * 0.84).toInt()
-            background = if (m.fromUser) Ui.rounded(Ui.SURFACE_HI, dp(20).toFloat())
-            else Ui.rounded(Ui.SURFACE, dp(20).toFloat(), Ui.STROKE, dp(1))
-            setOnLongClickListener { bubbleMenu(m); true }
-        }
-        val lp = LinearLayout.LayoutParams(-2, -2).apply {
-            gravity = if (m.fromUser) Gravity.END else Gravity.START
-            topMargin = dp(8)
-        }
-        list.addView(tv, lp)
-        if (save) chats.save(messages)
-        return tv
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (::gauges.isInitialized && gauges.onTouch(ev)) return true
+        return super.dispatchTouchEvent(ev)
     }
 
-    private fun bubbleMenu(m: ChatMsg) {
-        AlertDialog.Builder(this)
-            .setItems(arrayOf("Copier", "Relire à voix haute")) { _, which ->
-                when (which) {
-                    0 -> {
-                        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Nox", m.text))
-                        toast("Copié")
-                    }
-                    1 -> voiceOut.speakAll(m.text)
-                }
-            }.show()
+    private fun spacer(w: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(w), 1) }
+
+    private val turnActions = object : TurnView.Actions {
+        override fun copy(m: ChatMsg) {
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Nox", m.text))
+            toast("Copié")
+        }
+        override fun readAloud(m: ChatMsg) = voiceOut.speakAll(m.text)
+        override fun quickReply(text: String) {
+            if (engine.busy) return
+            turnFromVoice = false
+            send(text)
+        }
+    }
+
+    private fun addTurn(m: ChatMsg, save: Boolean = true, register: Boolean = true): TurnView {
+        if (register) messages += m
+        val t = TurnView(this, m).apply { actions = turnActions }
+        list.addView(t, LinearLayout.LayoutParams(-1, -2))
+        if (save) chats.save(messages)
+        return t
     }
 
     private fun scrollToEnd() = scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
@@ -405,10 +405,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         runTurn(if (img != null && text.isBlank()) "Que vois-tu sur cette photo ?" else text, null, 0L, img)
     }
 
-    private fun sendAudio(wav: ByteArray, ms: Long) = runTurn(null, wav, ms)
+    private fun sendAudio(wavs: List<ByteArray>, ms: Long) = runTurn(null, wavs, ms)
 
     /** Un tour de parole complet : bulle utilisateur → réflexion → réponse en flux (+ voix). */
-    private fun runTurn(text: String?, wav: ByteArray?, ms: Long, image: ByteArray? = null) {
+    private fun runTurn(text: String?, wav: List<ByteArray>?, ms: Long, image: ByteArray? = null) {
         if (!engine.ready) { toast(if (loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
         if (engine.busy) return
         stopListening()
@@ -419,11 +419,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             image != null -> "📷 " + (text?.ifBlank { "Que vois-tu sur cette photo ?" } ?: "")
             text != null -> text
             else -> "🎙 message vocal (${(ms + 500) / 1000} s)"
-        })
-        val userView = addBubble(userMsg)
-        val reply = ChatMsg(false, "")
-        val view = addBubble(reply, save = false)
-        view.text = "…"
+        }).apply { voice = wav != null }
+        // les relances de la réponse précédente ne servent plus
+        (list.getChildAt(list.childCount - 1) as? TurnView)?.clearSuggestions()
+        val userView = addTurn(userMsg)
+        val reply = ChatMsg(false, "").apply { voice = prefs.autoSpeak }
+        val view = addTurn(reply, save = false)
         streamingMsg = reply
         streamingView = view
         scrollToEnd()
@@ -437,7 +438,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             override fun onChunk(text: String) {
                 if (orb.mode == OrbView.Mode.THINKING) orbHint.text = "Réflexion…"
                 reply.text += text
-                view.text = Markdown.render(reply.text)
+                view.render()
                 if (speak) voiceOut.feed(text)
                 if (scroll.getChildAt(0).bottom - (scroll.height + scroll.scrollY) < dp(140)) scrollToEnd()
             }
@@ -445,13 +446,17 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             override fun onTranscript(text: String) {
                 if (text.isBlank()) return
                 userMsg.text = text
-                userView.text = Markdown.render("🎙 $text")
+                userView.render()
+                userView.refreshFooter()
             }
 
-            override fun onContext(n: Int) = addChip("📚 $n extrait${if (n > 1) "s" else ""} de ta bibliothèque")
+            override fun onContext(titles: List<String>) { view.setSources(titles); scrollToEnd() }
+
+            override fun onSuggestions(list: List<String>) { view.setSuggestions(list); scrollToEnd() }
 
             override fun onDone(stats: String) {
-                if (reply.text.isBlank()) { reply.text = "(silence)"; view.text = reply.text }
+                if (reply.text.isBlank()) reply.text = "(silence)"
+                view.render(); view.refreshFooter()
                 statsLine.text = stats
                 if (prefs.rememberChats && stats != "interrompu") library.addExchange(userMsg.text.removePrefix("🎙 ").removePrefix("📷 "), reply.text)
                 finishTurn(speak)
@@ -459,25 +464,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
             override fun onError(msg: String) {
                 reply.text = if (reply.text.isBlank()) "⚠ $msg" else reply.text + "\n\n⚠ $msg"
-                view.text = Markdown.render(reply.text)
+                view.render(); view.refreshFooter()
                 finishTurn(speak)
             }
         }
         if (wav != null) engine.sendAudio(wav, ms, prior, listener) else engine.send(text ?: "", prior, listener, image)
         refreshAction()
-    }
-
-    /** Puce discrète « ⏱ minuteur 5 min » quand Nox utilise une compétence. */
-    private fun addChip(label: String) {
-        val chip = text(label, 12f, Ui.CYAN).apply {
-            setPadding(dp(12), dp(5), dp(12), dp(5))
-            background = Ui.rounded(0xFF0F1E2A.toInt(), dp(14).toFloat(), 0xFF1D4A5E.toInt(), dp(1))
-        }
-        val lp = LinearLayout.LayoutParams(-2, -2).apply { gravity = Gravity.START; topMargin = dp(6) }
-        val anchor = streamingView
-        val idx = if (anchor != null) list.indexOfChild(anchor) else -1
-        if (idx >= 0) list.addView(chip, idx, lp) else list.addView(chip, lp)
-        scrollToEnd()
     }
 
     private fun finishTurn(spoken: Boolean) {
@@ -500,7 +492,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         chats.clear()
         list.removeAllViews()
         statsLine.text = ""
-        addBubble(ChatMsg(false, "Page blanche. De quoi on parle ?"), save = false, register = false)
+        addTurn(ChatMsg(false, greeting() + " Page blanche : de quoi on parle ?"), save = false, register = false)
         engine.resetConversation(emptyList())
     }
 
@@ -544,10 +536,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             if (capture == null) capture = AudioCapture(this)
             transcript.visibility = View.GONE
             setOrb(OrbView.Mode.LISTENING, "Je t'écoute…")
-            capture?.start()
+            capture?.start(prefs.patienceMs, prefs.maxListenSec)
             return
         }
         if (voiceIn == null) voiceIn = VoiceIn(this, this)
+        voiceIn?.patienceMs = prefs.patienceMs
         transcript.text = ""
         transcript.visibility = View.VISIBLE
         setOrb(OrbView.Mode.LISTENING, "Je t'écoute…")
@@ -558,7 +551,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     override fun onCaptureStarted() = setOrb(OrbView.Mode.LISTENING, "Je t'écoute · oreille Gemma (touche quand tu as fini)")
     override fun onCaptureLevel(level: Float) = orb.setLevel(level)
-    override fun onCaptured(wav: ByteArray, durationMs: Long) {
+    override fun onCaptureElapsed(speechMs: Long) {
+        val s = speechMs / 1000
+        orbHint.text = String.format(java.util.Locale.FRANCE, "Je t'écoute… %d:%02d · touche quand tu as fini", s / 60, s % 60)
+    }
+
+    override fun onCaptured(wav: List<ByteArray>, durationMs: Long) {
         orb.setLevel(0f)
         turnFromVoice = true
         sendAudio(wav, durationMs)
@@ -629,6 +627,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         if (requestCode == ModelsDialog.REQ_IMPORT) ModelsDialog.onImportResult(this, resultCode, data)
         if (requestCode == REQ_IMAGE && resultCode == RESULT_OK) data?.data?.let { loadImage(it) }
         if (requestCode == SkillsDialog.REQ_DOC && resultCode == RESULT_OK) data?.data?.let { SkillsDialog.importDocument(this, it) }
+        if (requestCode == SkillsDialog.REQ_FK && resultCode == RESULT_OK) data?.data?.let { SkillsDialog.importFreekipedia(this, it) }
     }
 
     // ---- vue 📷
@@ -696,8 +695,16 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         intent.action = null
     }
 
+    /** Salutation selon l'heure, avec le prénom s'il est connu. */
+    private fun greeting(): String {
+        val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val hello = when (h) { in 5..11 -> "Bonjour"; in 12..17 -> "Salut"; in 18..22 -> "Bonsoir"; else -> "Encore debout" }
+        val name = prefs.userName.trim()
+        return if (name.isEmpty()) "$hello !" else if (h in 23..23 || h < 5) "$hello, $name ?" else "$hello $name !"
+    }
+
     private fun welcomeText() = buildString {
-        append("Salut ! Je suis **Nox**. Je vis entièrement dans ce téléphone : ")
+        append(greeting()).append(" Je suis **Nox**. Je vis entièrement dans ce téléphone : ")
         append("pas de cloud, pas de compte, rien ne sort d'ici.\n\n")
         append("Touche l'orbe et parle-moi, ou écris en bas. ")
         append("Un appui long sur l'orbe active le mode mains libres : on discute à voix haute, sans toucher l'écran.")

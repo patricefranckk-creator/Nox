@@ -154,7 +154,7 @@ class Skills(private val ctx: Context, private val library: Library) {
             } else { memory.add(t); used("🧠 retenu"); "Retenu : $t" }
         },
 
-        Skill("bibliotheque", "Bibliothèque", "Cherche dans les documents, notes et anciennes conversations de l'utilisateur. Quand il parle de quelque chose qu'il t'a déjà dit, écrit ou importé.",
+        Skill("bibliotheque", "Bibliothèque", "Cherche dans la bibliothèque de l'utilisateur : documents, fiches encyclopédiques (Freekipedia), notes et anciennes conversations. Pour une question de connaissances ou quand il évoque quelque chose déjà dit, écrit ou importé.",
             obj("requete" to str("mots-clés ou question précise"))) { p ->
             val hits = library.search(p.optString("requete"), k = 4, excludeChatsAfter = conversationStart)
             used("📚 ${hits.size} extrait(s)")

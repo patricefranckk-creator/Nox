@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="nox_bg">#07070C</color>
-    <color name="nox_surface">#14141F</color>
+    <color name="nox_bg">#0A1120</color>
+    <color name="nox_surface">#141C30</color>
     <color name="nox_accent">#8B7CFF</color>
-    <color name="ic_bg">#07070C</color>
+    <color name="ic_bg">#0A1120</color>
 </resources>

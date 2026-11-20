@@ -45,8 +45,10 @@ class LlmEngine(
         fun onError(msg: String)
         /** Écoute native : ce que Gemma a entendu (pour remplir la bulle de l'utilisateur). */
         fun onTranscript(text: String) {}
-        /** Bibliothèque : n extraits injectés automatiquement avant la réponse. */
-        fun onContext(n: Int) {}
+        /** Bibliothèque : extraits injectés automatiquement avant la réponse (titres). */
+        fun onContext(titles: List<String>) {}
+        /** Relances proposées par Nox à la fin de sa réponse. */
+        fun onSuggestions(list: List<String>) {}
     }
 
     private data class Attempt(val kind: String, val mtp: Boolean, val ctx: Int, val audio: Boolean, val vision: Boolean)
@@ -221,8 +223,17 @@ class LlmEngine(
         if (withSkills) {
             sb.append("\n\nTu agis vraiment sur le téléphone grâce à tes outils. Dès qu'on te demande une action ou une info du téléphone ")
                 .append("(heure, minuteur, rappel, liste, musique, appel, SMS, trajet, appli, réglage, agenda…), appelle l'outil au lieu de répondre de tête. ")
-                .append("Tout calcul passe par « calculer ». Si l'utilisateur évoque quelque chose qu'il t'a déjà dit, noté ou importé, cherche dans « bibliotheque ». ")
+                .append("Tout calcul passe par « calculer ». Pour une question de connaissances (définition, histoire, santé, pratique…) ou si l'utilisateur évoque quelque chose qu'il t'a déjà dit, noté ou importé, cherche d'abord dans « bibliotheque ». ")
                 .append("Après une action, confirme en une phrase naturelle, sans détailler l'outil.")
+        }
+        if (withSkills) {
+            sb.append("\n\nQuand ton interlocuteur te confie quelque chose de durable sur lui (goûts, proches, projets, habitudes, contraintes), ")
+                .append("retiens-le avec « memoire » sans en faire tout un plat. Sers-toi de ce que tu sais de lui pour personnaliser tes réponses, ")
+                .append("rebondis sur ce qu'il dit et pose parfois une question pour mieux le connaître, comme le ferait un proche attentionné.")
+        }
+        if (prefs.suggestions) {
+            sb.append("\n\nTermine chaque réponse par une dernière ligne qui commence par >> suivie de 2 ou 3 relances très courtes ")
+                .append("(5 mots maximum), séparées par |, que ton interlocuteur pourrait te dire ensuite. Exemple : >> Raconte-m'en plus | Et demain ?")
         }
         sb.append(skills.memory.promptBlock())
         return sb.toString()
@@ -301,7 +312,7 @@ class LlmEngine(
             if (hits.isNotEmpty()) NoxLog.i("RAG", "Injection auto ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
             else NoxLog.d("RAG", "Rien d'assez pertinent ($lastRagMs ms)")
             val ctxBlock = library.contextBlock(hits)
-            if (hits.isNotEmpty()) post { l.onContext(hits.size) }
+            if (hits.isNotEmpty()) { val titles = hits.map { it.chunk.title }; post { l.onContext(titles) } }
             val full = if (ctxBlock.isEmpty()) text else ctxBlock + "\nMessage de l'utilisateur : " + text
             val msg = if (image != null && visionReady)
                 Message.user(Contents.of(Content.ImageBytes(image), Content.Text(full.ifBlank { "Décris cette image." })))
@@ -313,14 +324,17 @@ class LlmEngine(
     }
 
     /** Écoute native : le son brut part directement dans Gemma, qui transcrit puis répond. */
-    fun sendAudio(wav: ByteArray, durationMs: Long, history: List<ChatMsg>, l: StreamListener) {
-        val msg = Message.user(Contents.of(Content.AudioBytes(wav), Content.Text(AUDIO_INSTRUCTION)))
-        // ~25 jetons audio par seconde chez Gemma
-        val approxChars = ((durationMs / 1000.0) * 25 * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
+    fun sendAudio(wavs: List<ByteArray>, durationMs: Long, history: List<ChatMsg>, l: StreamListener) {
+        val parts = ArrayList<Content>()
+        wavs.forEach { parts += Content.AudioBytes(it) }
+        parts += Content.Text(AUDIO_INSTRUCTION)
+        val msg = Message.user(Contents.of(parts))
+        // estimation prudente du coût de l'audio dans le contexte
+        val approxChars = ((durationMs / 1000.0) * AUDIO_TOKENS_PER_S * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
         if (busy) return
         busy = true
         lastRagMs = 0; lastRagHits = 0
-        NoxLog.i("OREILLE", "Message vocal envoyé à Gemma : ${durationMs} ms d'audio, ${wav.size / 1024} Ko")
+        NoxLog.i("OREILLE", "Message vocal envoyé à Gemma : ${durationMs} ms d'audio en ${wavs.size} clip(s), ${wavs.sumOf { it.size } / 1024} Ko")
         worker.execute { submitNow(msg, approxChars, TranscriptExtractor(), history, l, "voix") }
     }
 
@@ -342,11 +356,13 @@ class LlmEngine(
             }
             charsInContext += approxChars
             skills.callsThisTurn.set(0)
+            library.hold = true
             NoxLog.d("GEN", "Envoi ($mode, ≈${(approxChars / CHARS_PER_TOKEN).toInt()} jetons) · ${NoxLog.memSnapshot()}")
             val t0 = System.nanoTime()
             var tFirst = 0L
             var chars = 0
             val think = ThinkFilter()
+            val suggest = if (prefs.suggestions) SuggestFilter() else null
             try {
                 conv.sendMessageAsync(msg, object : MessageCallback {
                     override fun onMessage(message: Message) {
@@ -355,6 +371,7 @@ class LlmEngine(
                             chunk = transcript.feed(chunk)
                             transcript.take()?.let { heard -> post { l.onTranscript(heard) } }
                         }
+                        if (suggest != null) chunk = suggest.feed(chunk)
                         if (chunk.isEmpty()) return
                         if (tFirst == 0L) tFirst = System.nanoTime()
                         chars += chunk.length
@@ -363,8 +380,14 @@ class LlmEngine(
 
                     override fun onDone() {
                         transcript?.flush()?.let { rest -> if (rest.isNotEmpty()) { chars += rest.length; post { l.onChunk(rest) } } }
+                        suggest?.let { sf ->
+                            sf.flushVisible().let { rest -> if (rest.isNotEmpty()) { chars += rest.length; post { l.onChunk(rest) } } }
+                            val list = sf.suggestions()
+                            if (list.isNotEmpty()) { NoxLog.d("GEN", "Relances : ${list.joinToString(" | ")}"); post { l.onSuggestions(list) } }
+                        }
                         charsInContext += chars
                         busy = false
+                        library.hold = false
                         val stats = stats(t0, tFirst, chars)
                         record(mode, t0, tFirst, chars)
                         post { l.onDone(stats) }
@@ -373,6 +396,7 @@ class LlmEngine(
                     override fun onError(throwable: Throwable) {
                         charsInContext += chars
                         busy = false
+                        library.hold = false
                         if (throwable is CancellationException) {
                             NoxLog.i("GEN", "Génération interrompue après $chars caractères")
                             post { l.onDone("interrompu") }
@@ -384,11 +408,15 @@ class LlmEngine(
                 })
             } catch (t: Throwable) {
                 busy = false
+                library.hold = false
                 NoxLog.e("GEN", "Envoi impossible", t)
                 post { l.onError(t.message ?: "erreur") }
             }
         }
     }
+
+    /** Remplissage estimé de la mémoire de travail (pour les jauges). */
+    fun contextPct(): Int = if (!ready) 0 else (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt().coerceIn(0, 100)
 
     @Volatile private var lastRagMs = 0L
     @Volatile private var lastRagHits = 0
@@ -441,6 +469,8 @@ class LlmEngine(
         const val CHARS_PER_TOKEN = 3.6
         /** Estimation de la place prise par la description des outils dans le contexte. */
         private const val SKILLS_PROMPT_CHARS = 4200
+        /** Jetons audio par seconde (estimation prudente pour la gestion du contexte). */
+        private const val AUDIO_TOKENS_PER_S = 12
 
         const val AUDIO_INSTRUCTION =
             "Ceci est un message vocal de ton interlocuteur. Écris d'abord, seul sur la première ligne, " +
@@ -532,5 +562,48 @@ class ThinkFilter {
             if (text.isNotEmpty()) started = true
         }
         return text
+    }
+}
+
+/**
+ * Isole la ligne « >> relance 1 | relance 2 » que Nox écrit en fin de réponse : elle n'est ni affichée
+ * dans le texte ni lue à voix haute, mais transformée en boutons de relance.
+ */
+class SuggestFilter {
+    private val hold = StringBuilder()
+    private val tail = StringBuilder()
+    private var inTail = false
+    private var atLineStart = true
+    private var prevSpace = false
+
+    fun feed(chunk: String): String {
+        if (inTail) { tail.append(chunk); return "" }
+        val out = StringBuilder()
+        for (ch in chunk) {
+            if (inTail) { tail.append(ch); continue }
+            if (hold.isNotEmpty() || ((atLineStart || prevSpace) && ch == '>')) {
+                hold.append(ch)
+                val h = hold.toString()
+                if (h.trimStart().startsWith(">>")) { inTail = true; tail.append(h.trimStart().removePrefix(">>")); hold.setLength(0); continue }
+                if (h.trimStart() == ">") continue
+                out.append(h); hold.setLength(0)
+                atLineStart = ch == '\n'; prevSpace = ch == ' '
+                continue
+            }
+            out.append(ch)
+            atLineStart = ch == '\n'; prevSpace = ch == ' '
+        }
+        return out.toString()
+    }
+
+    /** Texte retenu en attente qui n'était finalement pas une relance. */
+    fun flushVisible(): String = if (inTail) "" else hold.toString().also { hold.setLength(0) }
+
+    fun suggestions(): List<String> {
+        if (!inTail) return emptyList()
+        return tail.toString().lines().first().split('|')
+            .map { it.trim().trim('"', '«', '»', '*', '-', ' ').trim() }
+            .filter { it.length in 2..60 }
+            .take(3)
     }
 }

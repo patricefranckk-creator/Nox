@@ -85,6 +85,21 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("verbose_log", false)
         set(v) = sp.edit().putBoolean("verbose_log", v).apply()
 
+    /** Écoute : silence (ms) avant de considérer que tu as fini de parler. */
+    var patienceMs: Int
+        get() = sp.getInt("patience_ms", 2000)
+        set(v) = sp.edit().putInt("patience_ms", v).apply()
+
+    /** Durée maximale d'un message vocal (s). */
+    var maxListenSec: Int
+        get() = sp.getInt("max_listen", 90)
+        set(v) = sp.edit().putInt("max_listen", v).apply()
+
+    /** Relances proposées sous chaque réponse. */
+    var suggestions: Boolean
+        get() = sp.getBoolean("suggestions", true)
+        set(v) = sp.edit().putBoolean("suggestions", v).apply()
+
     var voiceName: String
         get() = sp.getString("voice", "") ?: ""
         set(v) = sp.edit().putString("voice", v).apply()

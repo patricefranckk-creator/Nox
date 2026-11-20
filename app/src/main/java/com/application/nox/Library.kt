@@ -44,6 +44,9 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     private val df = HashMap<String, Int>()
     private var avgLen = 1.0
 
+    /** Mis à vrai par le moteur pendant une génération : la vectorisation de fond se met en pause. */
+    @Volatile var hold = false
+
     @Volatile private var embedder: EmbeddingEngine? = null
     @Volatile var semantic = false; private set
     private val embedLock = Any()
@@ -111,7 +114,9 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         if (todo.isEmpty()) return
         val clock = NoxLog.chrono()
         var ok = 0
-        for (c in todo) {
+        for ((i, c) in todo.withIndex()) {
+            while (hold) Thread.sleep(150)           // le cerveau principal passe d'abord
+            if (i > 0 && i % 100 == 0) NoxLog.i("RAG", "Vectorisation… $i/${todo.size}")
             val v = embed(c.title + "\n" + c.text, query = false) ?: continue
             c.vec = v
             db.setVec(c.id, v)
@@ -172,19 +177,95 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         }
     }
 
-    private fun insert(source: String, title: String, parts: List<String>): Int {
+    // ================================================================ Freekipedia
+
+    data class FkResult(val fiches: Int, val passages: Int, val nouvelles: Int, val maj: Int, val info: String)
+
+    /**
+     * Intègre un fichier produit par Freekipedia (« lia_maj_….db » ou « lia_base_complete_….db »).
+     * Même logique que l'IntegrateurMaj de Lia : chaque fiche remplace sa version précédente (idempotent).
+     * Les vecteurs e5 de Freekipedia ne sont pas compatibles avec EmbeddingGemma : les passages sont
+     * revectorisés ici, en tâche de fond.
+     */
+    fun importFreekipedia(file: File, onDone: (FkResult?, String?) -> Unit) {
+        worker.execute {
+            val clock = NoxLog.chrono()
+            val main = android.os.Handler(android.os.Looper.getMainLooper())
+            try {
+                val src = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
+                try {
+                    fun has(t: String) = src.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?", arrayOf(t)).use { it.moveToFirst() }
+                    require(has("fiches") && has("chunks")) { "ce fichier n'est pas une mise à jour Freekipedia" }
+                    val meta = HashMap<String, String>()
+                    if (has("meta")) src.rawQuery("SELECT cle, valeur FROM meta", null).use { c -> while (c.moveToNext()) meta[c.getString(0)] = c.getString(1) ?: "" }
+                    val existing = synchronized(lock) { chunks.map { it.source }.filter { it.startsWith("fk:") }.toHashSet() }
+                    val fiches = ArrayList<Array<String?>>()
+                    src.rawQuery("SELECT uid, titre, source, licence, url FROM fiches", null).use { c ->
+                        while (c.moveToNext()) fiches += arrayOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))
+                    }
+                    var passages = 0; var nouvelles = 0; var maj = 0
+                    val w = db.writableDatabase
+                    w.beginTransaction()
+                    try { for (f in fiches) {
+                        val uid = f[0] ?: continue
+                        val parts = ArrayList<String>()
+                        src.rawQuery("SELECT texte FROM chunks WHERE fiche_uid = ? ORDER BY ordre", arrayOf(uid)).use { c ->
+                            while (c.moveToNext()) c.getString(0)?.takeIf { it.isNotBlank() }?.let { parts += it }
+                        }
+                        val source = "fk:$uid"
+                        if (source in existing) maj++ else nouvelles++
+                        removeSourceNow(source, rebuild = false)
+                        val origin = listOfNotNull(f[2], f[3]).filter { it.isNotBlank() }.joinToString(", ")
+                        val title = (f[1] ?: "Fiche") + if (origin.isNotEmpty()) " ($origin)" else ""
+                        passages += insert(source, title, parts, rebuild = false)
+                    }
+                        w.setTransactionSuccessful()
+                    } finally { w.endTransaction() }
+                    synchronized(lock) { rebuildStats() }
+                    val info = listOfNotNull(meta["date"]?.let { "du $it" }, meta["producteur"],
+                        if (meta["complet"] == "1") "base complète" else "mise à jour").joinToString(" · ")
+                    val r = FkResult(fiches.size, passages, nouvelles, maj, info)
+                    NoxLog.p("RAG", "Freekipedia intégré en ${clock.ms()} ms : ${r.fiches} fiches ($nouvelles nouvelles, $maj remplacées), $passages passages · $info")
+                    main.post { onDone(r, null) }
+                } finally {
+                    src.close()
+                    file.delete()
+                }
+                embedPending()
+            } catch (t: Throwable) {
+                NoxLog.e("RAG", "Import Freekipedia impossible", t)
+                main.post { onDone(null, t.message ?: "fichier illisible") }
+            }
+        }
+    }
+
+    fun freekipediaStats(): Pair<Int, Int> = synchronized(lock) {
+        val fk = chunks.filter { it.source.startsWith("fk:") }
+        fk.map { it.source }.toSet().size to fk.size
+    }
+
+    fun removeFreekipedia(done: (() -> Unit)? = null) {
+        worker.execute {
+            db.deleteLike("fk:%")
+            synchronized(lock) { chunks.removeAll { it.source.startsWith("fk:") }; rebuildStats() }
+            NoxLog.i("RAG", "Fiches Freekipedia retirées")
+            done?.let { android.os.Handler(android.os.Looper.getMainLooper()).post(it) }
+        }
+    }
+
+    private fun insert(source: String, title: String, parts: List<String>, rebuild: Boolean = true): Int {
         val now = System.currentTimeMillis()
         val added = parts.filter { it.isNotBlank() }.map { t ->
             val id = db.insert(source, title, t, now)
             Chunk(id, source, title, t, now, null)
         }
-        synchronized(lock) { chunks.addAll(added); rebuildStats() }
+        synchronized(lock) { chunks.addAll(added); if (rebuild) rebuildStats() }
         return added.size
     }
 
-    private fun removeSourceNow(source: String) {
+    private fun removeSourceNow(source: String, rebuild: Boolean = true) {
         db.deleteSource(source)
-        synchronized(lock) { chunks.removeAll { it.source == source }; rebuildStats() }
+        synchronized(lock) { chunks.removeAll { it.source == source }; if (rebuild) rebuildStats() }
     }
 
     /** On garde les ~1500 derniers échanges (largement assez, et la recherche reste instantanée). */
@@ -286,8 +367,9 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         val docs = chunks.count { it.source.startsWith("doc:") }
         val chats = chunks.count { it.source.startsWith("chat:") }
         val notes = chunks.count { it.source.startsWith("note:") }
+        val fk = chunks.count { it.source.startsWith("fk:") }
         val vec = chunks.count { it.vec != null }
-        "$docs extraits de documents · $notes listes · $chats échanges mémorisés" +
+        "$docs extraits de documents · $fk passages Freekipedia · $notes listes · $chats échanges mémorisés" +
             if (semantic) " · ${vec}/${chunks.size} vectorisés" else " · recherche par mots-clés"
     }
 
@@ -349,6 +431,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         }
 
         fun deleteSource(source: String) { writableDatabase.delete("chunks", "source=?", arrayOf(source)) }
+        fun deleteLike(pattern: String) { writableDatabase.delete("chunks", "source LIKE ?", arrayOf(pattern)) }
         fun deleteId(id: Long) { writableDatabase.delete("chunks", "id=?", arrayOf(id.toString())) }
 
         private fun toBytes(v: FloatArray): ByteArray {

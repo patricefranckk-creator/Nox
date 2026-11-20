@@ -174,7 +174,8 @@ object HelpDialog {
         item("Appui long sur l'orbe", "Mode mains libres : Nox réécoute après chaque réponse, l'écran reste allumé.")
         item("Écrire", "Zone de texte en bas, ➤ pour envoyer. 🎙 lance l'écoute, ■ arrête la réponse.")
         item("Photo ＋", "Joins une photo puis pose ta question : « qu'est-ce que c'est ? », « lis ce document »…")
-        item("Appui long sur une bulle", "Copier ou relire à voix haute.")
+        item("Sous chaque message", "⧉ copier et ▶ relire en un tap. Les relances proposées par Nox s'envoient d'un tap.")
+        item("Parler longtemps", "Nox attend ton silence (réglable : 1,2 à 5 s) et accepte jusqu'à 3 minutes de parole d'affilée. Le compteur s'affiche sous l'orbe.")
 
         sec("Exemples de demandes")
         item("Actions", "« Mets un minuteur de 10 minutes » · « Réveille-moi à 6h30 » · « Rappelle-moi dans 20 minutes de sortir le linge » · « Allume la lampe » · « Ouvre Deezer » · « Mets du Stromae » · « Morceau suivant »")
@@ -182,12 +183,14 @@ object HelpDialog {
         item("Listes & mémoire", "« Ajoute du pain et du lait aux courses » · « Qu'est-ce qu'il y a sur ma liste ? » · « Retiens que je suis allergique aux noix » · « Oublie ça »")
         item("Bibliothèque", "Ajoute tes documents dans ⚡ ou partage un texte vers Nox, puis : « Qu'est-ce que disait le compte rendu sur… ? » · « De quoi on avait parlé la semaine dernière ? »")
         item("Calculs", "« Combien font 18 % de 2450 ? » : Nox utilise une vraie calculatrice, sans erreur.")
+        item("Connaissances (Freekipedia)", "Crée des fiches dans Freekipedia, exporte la mise à jour (.db), puis ⋮ › Importer Freekipedia. Nox y cherche tout seul pour les questions de connaissances, et montre « Dans ta bibliothèque » ce qu'il a relu.")
 
         sec("Le menu ⋮")
         item("Nouvelle conversation", "Repart de zéro (la mémoire longue et la bibliothèque restent).")
         item("Compétences, mémoire & bibliothèque", "Ce que Nox sait faire, ce qu'il a retenu de toi, tes documents.")
         item("Modèles", "Le cœur (Gemma 4 E2B / E4B) et la mémoire sémantique (EmbeddingGemma 2).")
         item("Réglages", "Personnalité, voix, écoute, vue, moteur (GPU/CPU, turbo, contexte).")
+        item("Jauges", "RAM, CPU, GPU et batterie en direct. Aussi en balayant depuis le bord droit de l'écran.")
         item("Journal de bord", "Performances (temps avant le 1er mot, vitesse, RAG, outils) et erreurs. Bouton Partager pour me l'envoyer.")
 
         sec("Si ça coince")

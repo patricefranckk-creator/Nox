@@ -28,6 +28,8 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     private var onDevice = false
     private var triedFallback = false
     var active = false; private set
+    /** Silence à attendre avant de considérer la phrase finie. */
+    var patienceMs = 2000
     private var startedAt = 0L
 
     val isOnDevice get() = onDevice
@@ -50,8 +52,9 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1400L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1100L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, patienceMs.toLong())
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, (patienceMs - 300).coerceAtLeast(800).toLong())
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 15_000L)
     }
 
     fun start() {
