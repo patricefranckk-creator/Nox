@@ -190,8 +190,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     data class FkResult(val fiches: Int, val passages: Int, val nouvelles: Int, val maj: Int, val info: String, val vecteurs: Int = 0)
 
     /**
-     * Intègre un fichier produit par Freekipedia, ancien format (« lia_maj_….db », tables fiches + chunks)
-     * ou format 3 (« lia_memoire_….db », tables fiches + passages). Chaque fiche remplace sa version
+     * Intègre un fichier produit par Freekipedia : format Nox (« nox_….db », Freekipedia 4), format 3
+     * (« lia_memoire_….db ») ou ancien format (« lia_maj_….db »). Chaque fiche remplace sa version
      * précédente (idempotent).
      * Si le fichier contient la table « nox_passages » calculée avec le même modèle et le même préfixe que
      * Nox (EmbeddingGemma 2, voir [DOC_PREFIX]), les vecteurs sont repris tels quels ; sinon les passages
@@ -209,17 +209,27 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                     require(has("fiches") && (v3 || has("chunks"))) { "ce fichier n'est pas un fichier Freekipedia" }
                     val meta = HashMap<String, String>()
                     if (has("meta")) src.rawQuery("SELECT cle, valeur FROM meta", null).use { c -> while (c.moveToNext()) meta[c.getString(0)] = c.getString(1) ?: "" }
-                    val noxVectors = v3 && has("nox_passages") && meta["nox_format"] == NOX_FORMAT &&
+                    // Freekipedia 4 : fichier fait pour Nox (« nox_biblio »), vecteurs dans passages.embedding
+                    val biblio = meta["type"] == NOX_BIBLIO
+                    val noxVectors = if (biblio)
+                        meta["format"] == NOX_FORMAT && meta["modele"] == store.embedSpec.file && meta["prefixe"] == DOC_PREFIX
+                    else v3 && has("nox_passages") && meta["nox_format"] == NOX_FORMAT &&
                         meta["nox_modele"] == store.embedSpec.file && meta["nox_prefixe"] == DOC_PREFIX
-                    if (v3 && has("nox_passages") && !noxVectors)
-                        NoxLog.w("RAG", "Vecteurs Nox du fichier ignorés (modèle ${meta["nox_modele"]}, préfixe « ${meta["nox_prefixe"]} ») : recalcul")
+                    if ((biblio || (v3 && has("nox_passages"))) && !noxVectors)
+                        NoxLog.w("RAG", "Vecteurs du fichier ignorés (modèle ${meta["modele"] ?: meta["nox_modele"]}) : recalcul")
                     val existing = synchronized(lock) { chunks.map { it.source }.filter { it.startsWith("fk:") }.toHashSet() }
                     val fiches = ArrayList<Array<String?>>()
-                    val licence = if (v3) "provider" else "licence"
-                    src.rawQuery("SELECT uid, titre, source, $licence, url FROM fiches", null).use { c ->
-                        while (c.moveToNext()) fiches += arrayOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))
+                    val fichesSql = when {
+                        biblio -> "SELECT uid, titre, source, licence, url, titre_nox FROM fiches"
+                        v3 -> "SELECT uid, titre, source, provider, url, NULL FROM fiches"
+                        else -> "SELECT uid, titre, source, licence, url, NULL FROM fiches"
+                    }
+                    src.rawQuery(fichesSql, null).use { c ->
+                        while (c.moveToNext()) fiches += arrayOf(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(5))
                     }
                     val passagesSql = when {
+                        biblio && noxVectors -> "SELECT texte, NULL, embedding FROM passages WHERE fiche_uid = ? ORDER BY ordre"
+                        biblio -> "SELECT texte, NULL, NULL FROM passages WHERE fiche_uid = ? ORDER BY ordre"
                         noxVectors -> "SELECT p.texte, n.titre, n.embedding FROM passages p LEFT JOIN nox_passages n ON n.passage_id = p.id WHERE p.fiche_uid = ? ORDER BY p.ordre"
                         v3 -> "SELECT texte, NULL, NULL FROM passages WHERE fiche_uid = ? ORDER BY ordre"
                         else -> "SELECT texte, NULL, NULL FROM chunks WHERE fiche_uid = ? ORDER BY ordre"
@@ -244,7 +254,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                         val source = "fk:$uid"
                         if (source in existing) maj++ else nouvelles++
                         removeSourceNow(source, rebuild = false)
-                        val title = noxTitle ?: if (v3) {
+                        val title = f[5] ?: noxTitle ?: if (v3) {
                             (f[1] ?: "Fiche") + (f[3]?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
                         } else {
                             val origin = listOfNotNull(f[2], f[3]).filter { it.isNotBlank() }.joinToString(", ")
@@ -257,7 +267,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                     } finally { w.endTransaction() }
                     synchronized(lock) { rebuildStats() }
                     val info = listOfNotNull(meta["date"]?.let { "du $it" }, meta["producteur"],
-                        if (v3) meta["requete"]?.let { "« $it »" } else if (meta["complet"] == "1") "base complète" else "mise à jour").joinToString(" · ")
+                        if (v3 || biblio) meta["requete"]?.let { "« $it »" } else if (meta["complet"] == "1") "base complète" else "mise à jour").joinToString(" · ")
                     val r = FkResult(fiches.size, passages, nouvelles, maj, info, vecteurs)
                     NoxLog.p("RAG", "Freekipedia intégré en ${clock.ms()} ms : ${r.fiches} fiches ($nouvelles nouvelles, $maj remplacées), $passages passages, $vecteurs vecteurs repris · $info")
                     main.post { onDone(r, null) }
@@ -532,6 +542,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         const val DOC_PREFIX = "task: search result | text: "
         const val QUERY_PREFIX = "task: search query | text: "
         const val NOX_FORMAT = "1"
+        const val NOX_BIBLIO = "nox_biblio"
 
         fun toFloats(b: ByteArray): FloatArray {
             val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)

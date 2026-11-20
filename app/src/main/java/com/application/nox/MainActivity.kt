@@ -850,6 +850,12 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             main.post { openVoicePage(listen = true) }
             return
         }
+        if (intent.action == ACTION_IMPORT_FREEKIPEDIA) {
+            val uri = intent.data
+            intent.action = null
+            if (uri != null) main.post { SkillsDialog.importFreekipedia(this, uri) }
+            return
+        }
         if (intent.action != Intent.ACTION_SEND) return
         val txt = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
         if (txt.isEmpty()) return
@@ -881,6 +887,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
     companion object {
+        /** Envoyé par Freekipedia (« Envoyer à Nox ») avec le fichier .db en données. */
+        const val ACTION_IMPORT_FREEKIPEDIA = "com.application.nox.IMPORTER_FREEKIPEDIA"
         const val EXTRA_VOICE = "com.application.nox.VOICE"
         const val REQ_PERM = 13
         const val REQ_PERMS_CENTER = 15

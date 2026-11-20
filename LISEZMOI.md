@@ -43,7 +43,7 @@ Le modèle ne change pas : Gemma 4 E2B (vitesse) ou E4B (qualité). Tout le rest
 
 - **Fil façon Lia** : bleu nuit, pas de bulles, étiquettes TOI / NOX, copier / relire sous chaque message, marqueurs « dit / lu à voix haute ».
 - **Conversation enrichie** : carte « Dans ta bibliothèque » (ce que Nox a relu), puces d'actions, relances suggérées à toucher, mémorisation proactive de ce que tu confies, salutation selon l'heure.
-- **Freekipedia** : Menu › Importer Freekipedia accepte les fichiers `lia_memoire_….db` (Freekipedia 3.1) et les anciens `lia_maj_….db` / `lia_base_complete_….db` (idempotent). Si Freekipedia a coché « Aussi pour Nox », ses vecteurs EmbeddingGemma 2 (même modèle, même préfixe, même texte que Nox) sont repris tels quels ; sinon les passages sont vectorisés ici, en pause pendant que Nox parle.
+- **Freekipedia** : « Envoyer à Nox » dans Freekipedia 4 ouvre directement l'import ; Menu › Importer Freekipedia accepte aussi les fichiers à la main : `nox_….db` (Freekipedia 4, vecteurs EmbeddingGemma 2 identiques à ceux de Nox, repris tels quels), `lia_memoire_….db` (3.x) et les anciens `lia_maj_….db` (idempotent). Sans vecteurs compatibles, les passages sont vectorisés ici, en pause pendant que Nox parle.
 - **Écoute longue** : patience réglable (1,2 / 2 / 3 / 5 s de silence), jusqu'à 3 min, découpée en clips de 30 s pour Gemma, compteur visible.
 - **Jauges** : RAM, CPU de Nox + fréquences, GPU Adreno (si Android laisse lire), batterie (%, °C, mA), thermique, contexte, résumé des perfs.
 

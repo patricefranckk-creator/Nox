@@ -68,6 +68,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- « Envoyer à Nox » depuis Freekipedia : importe le fichier dans la bibliothèque -->
+            <intent-filter>
+                <action android:name="com.application.nox.IMPORTER_FREEKIPEDIA" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="*/*" />
+            </intent-filter>
             <!-- Partager un texte vers Nox depuis n'importe quelle appli -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
