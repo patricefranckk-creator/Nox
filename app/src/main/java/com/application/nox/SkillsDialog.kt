@@ -27,8 +27,26 @@ class SkillsDialog(private val a: MainActivity) {
             val prog = NoxDialog.Builder(a).setTitle("Freekipedia").setMessage("Lecture du fichier…").setCancelable(false).show()
             Thread {
                 try {
-                    val tmp = java.io.File(a.cacheDir, "freekipedia_import.db")
+                    var name = uri.lastPathSegment ?: "fichier"
+                    a.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                        val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (i >= 0 && c.moveToFirst()) c.getString(i)?.let { name = it }
+                    }
+                    val tmp = java.io.File(a.cacheDir, "freekipedia_${System.currentTimeMillis()}.db")
+                    a.cacheDir.listFiles()?.filter { it.name.startsWith("freekipedia_") }?.forEach { it.delete() }
                     a.contentResolver.openInputStream(uri)?.use { i -> tmp.outputStream().use { o -> i.copyTo(o, 1 shl 16) } } ?: error("lecture impossible")
+                    checkSqlite(tmp, name)?.let { msg ->
+                        tmp.delete()
+                        NoxLog.w("RAG", "Import Freekipedia refusé : $msg")
+                        a.runOnUiThread {
+                            prog.dismiss()
+                            NoxDialog.Builder(a).setTitle("Ce n'est pas un fichier Freekipedia").setIcon("⚠️")
+                                .setMessage("$msg\n\nDans Freekipedia, crée le fichier puis touche « Envoyer à Nox ». Ou, ici, choisis dans Téléchargements le fichier nox_<sujet>_<date>.db.")
+                                .setPositiveButton("Choisir un autre fichier") { _, _ -> pickFreekipedia(a) }
+                                .setNegativeButton("Fermer", null).show()
+                        }
+                        return@Thread
+                    }
                     a.runOnUiThread { prog.setMessage("Intégration des fiches…") }
                     a.library.importFreekipedia(tmp) { r, err ->
                         prog.dismiss()
@@ -48,6 +66,22 @@ class SkillsDialog(private val a: MainActivity) {
                     a.runOnUiThread { prog.dismiss(); a.toast("Import impossible : ${t.message}") }
                 }
             }.start()
+        }
+
+        /** Null si [f] est bien une base SQLite ; sinon une explication lisible de ce qui a été reçu. */
+        private fun checkSqlite(f: java.io.File, name: String): String? {
+            val size = f.length()
+            if (size == 0L) return "« $name » est vide (0 octet). Le fichier n'a peut-être pas fini d'être enregistré."
+            val head = ByteArray(16)
+            val n = f.inputStream().use { it.read(head) }
+            if (n == 16 && String(head, Charsets.ISO_8859_1) == "SQLite format 3\u0000") return null
+            val kind = when {
+                n >= 2 && head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte() -> "une archive ZIP ou un APK"
+                n >= 4 && String(head, 0, 4, Charsets.ISO_8859_1) == "%PDF" -> "un PDF"
+                String(head, 0, n, Charsets.ISO_8859_1).trimStart().startsWith("<") -> "une page web (HTML)"
+                else -> "un fichier qui n'est pas une base de données"
+            }
+            return "« $name » (${size / 1024} Ko) est $kind."
         }
 
         /** Lit un document texte choisi par l'utilisateur et l'ajoute à la bibliothèque. */

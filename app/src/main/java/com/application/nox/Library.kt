@@ -273,7 +273,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                     main.post { onDone(r, null) }
                 } finally {
                     src.close()
-                    file.delete()
+                    for (suffix in listOf("", "-journal", "-wal", "-shm")) java.io.File(file.path + suffix).delete()
                 }
                 embedPending()
             } catch (t: Throwable) {
