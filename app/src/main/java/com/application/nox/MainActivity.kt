@@ -716,8 +716,16 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         Thread {
             val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l); refreshAction() } }
             try {
-                val web = if (prefs.webSearch) WebSearch.queryOf(text) else null
+                val clock = Router.timeAnswer(text)
+                val web = if (clock == null && prefs.webSearch) WebSearch.queryOf(text) else null
                 when {
+                    clock != null -> main.post {
+                        routing = false
+                        lastLibrary = null
+                        NoxLog.i("ROUTE", "Heure/date donnée par l'horloge du téléphone")
+                        l.onChunk(clock)
+                        l.onDone("horloge du téléphone")
+                    }
                     web != null -> {
                         main.post { setMode(NeuronView.State.THINKING, "Recherche sur internet…") }
                         val results = WebSearch.search(web)

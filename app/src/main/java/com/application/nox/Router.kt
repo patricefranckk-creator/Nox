@@ -27,6 +27,20 @@ object Router {
     private val QUESTION = Regex("^(?:qu'est[- ]ce|qu'est ce|c'est quoi|qui |quoi |quand |ou |pourquoi|comment|combien|quel|quelle|quels|quelles|est-ce|explique|definis|definition|" +
         "parle[- ]moi|dis[- ]moi|que faire|que dois|que sais|a quoi|en quoi|y a-t-il|faut-il|peut-on|doit-on|les symptomes|les causes|la difference)")
 
+    private val TIME = Regex("^(?:nox[ ,]+)?(?:(?:cherche|regarde|donne|dis)(?:[- ]moi)? (?:sur (?:le net|internet|la toile|le web) )?)?" +
+        "(?:quelle heure(?: est[- ]il| il est)?|l'heure(?: qu'il est)?|tu as l'heure|il est quelle heure|on est quel jour|quel jour (?:on est|sommes[- ]nous|est[- ]on|est[- ]il|il est)|" +
+        "quelle est la date(?: d'aujourd'hui)?|la date(?: d'aujourd'hui)?|on est le combien|quel jour sommes[- ]nous)$")
+
+    /** Heure ou date demandée : réponse exacte depuis l'horloge du téléphone, sans le modèle (il l'inventait). */
+    fun timeAnswer(message: String): String? {
+        val f = Text.fold(message.trim()).trimEnd('.', '!', '?', ' ', '…').replace(Regex("\\s+"), " ")
+        if (!TIME.matches(f)) return null
+        val now = java.util.Date()
+        val day = java.text.SimpleDateFormat("EEEE d MMMM yyyy", java.util.Locale.FRANCE).format(now)
+        val hour = java.text.SimpleDateFormat("H'h'mm", java.util.Locale.FRANCE).format(now)
+        return if (f.contains("heure")) "Il est $hour." else "Nous sommes le $day."
+    }
+
     fun isMoreDetails(message: String): Boolean {
         val f = Text.fold(message.trim()).trimEnd('.', '!', '?', ' ')
         return f.length <= 60 && DETAILS.containsMatchIn(f)

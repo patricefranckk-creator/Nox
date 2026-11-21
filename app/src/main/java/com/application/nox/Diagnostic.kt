@@ -358,6 +358,13 @@ class Diagnostic(private val a: MainActivity) {
             if (got == want) ok++ else c.warn("« $m » : demande de détails = $got (attendu $want)")
             c.line("${if (got == want) "✓" else "✗"} détails « $m » → $got")
         }
+        val clock = listOf("Quelle heure est-il ?" to true, "Cherche sur le net l'heure" to true, "On est quel jour ?" to true,
+            "À quelle heure ferme la piscine ?" to false, "L'heure de la messe" to false)
+        for ((m, want) in clock) {
+            n++; val got = Router.timeAnswer(m) != null
+            if (got == want) ok++ else c.warn("« $m » : horloge = $got (attendu $want)")
+            c.line("${if (got == want) "✓" else "✗"} horloge « $m » → $got")
+        }
         c.line("Observation : « Tu peux me dire c'est quoi un trou noir ? » → ${Router.isKnowledgeQuestion("Tu peux me dire c'est quoi un trou noir ?")}")
         c.line("Observation : « C'est quoi l'autisme ? » → ${Router.isKnowledgeQuestion("C'est quoi l'autisme ?")}")
         c.line("Réglages : bibliothèque d'abord ${oui(Nox.prefs.ragFirst)} · recherche web ${oui(Nox.prefs.webSearch)} · RAG auto ${oui(Nox.prefs.ragAuto)}")

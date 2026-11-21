@@ -254,9 +254,17 @@ class LlmEngine(
         return sb.toString()
     }
 
-    private fun newConversation(history: List<ChatMsg>): Conversation {
+    /** Consigne + outils : la part fixe de la mémoire de travail. */
+    private var baseChars = 0
+
+    /** Place libre pour un message (et sa réponse) après un compactage complet. */
+    private fun roomAfterCompaction(): Int =
+        (ctxTokens * CHARS_PER_TOKEN * USABLE).toInt() - baseChars - ANSWER_RESERVE
+
+    private fun newConversation(history: List<ChatMsg>, reserve: Int = 0): Conversation {
         val e = engine ?: error("moteur absent")
-        val budgetChars = (ctxTokens * CHARS_PER_TOKEN * 0.40).toInt()
+        baseChars = systemPrompt(prefs.skillsEnabled && toolsCapable).length + if (prefs.skillsEnabled && toolsCapable) SKILLS_PROMPT_CHARS else 0
+        val budgetChars = minOf((ctxTokens * CHARS_PER_TOKEN * 0.40).toInt(), roomAfterCompaction() - reserve).coerceAtLeast(0)
         val kept = ArrayList<ChatMsg>()
         var used = 0
         for (m in history.asReversed()) {
@@ -323,7 +331,12 @@ class LlmEngine(
             if (context != null) {
                 lastRagMs = 0; lastRagHits = 0
                 if (!contextTitles.isNullOrEmpty()) post { l.onContext(contextTitles) }
-                val full = context + "\nMessage de l'utilisateur : " + text
+                val room = (roomAfterCompaction() - text.length - 200).coerceAtLeast(600)
+                val ctxText = if (context.length <= room) context else {
+                    NoxLog.i("GEN", "Contexte réduit de ${context.length} à $room caractères (mémoire de travail ${ctxTokens} jetons)")
+                    context.take(room).substringBeforeLast('\n').ifBlank { context.take(room) }
+                }
+                val full = ctxText + "\nMessage de l'utilisateur : " + text
                 submitNow(Message.user(full), full.length, null, history, l, "texte")
                 return@execute
             }
@@ -376,13 +389,15 @@ class LlmEngine(
     }
 
     /** Toujours appelé sur le fil du modèle. */
-    private fun submitNow(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener, mode: String) {
+    private fun submitNow(msg: Message, approxChars: Int, transcript: TranscriptExtractor?, history: List<ChatMsg>, l: StreamListener, mode: String,
+                          retried: Boolean = false) {
         run {
-            val projected = charsInContext + approxChars + 1200
-            if (projected > ctxTokens * CHARS_PER_TOKEN * 0.80) {
+            val projected = charsInContext + approxChars + ANSWER_RESERVE
+            if (retried || projected > ctxTokens * CHARS_PER_TOKEN * USABLE) {
                 val c = NoxLog.chrono()
                 try { conversation?.close() } catch (_: Throwable) {}
-                conversation = try { newConversation(history) } catch (t: Throwable) { NoxLog.e("MOTEUR", "Compactage raté", t); null }
+                val keep = if (retried) emptyList() else history
+                conversation = try { newConversation(keep, approxChars) } catch (t: Throwable) { NoxLog.e("MOTEUR", "Compactage raté", t); null }
                 NoxLog.p("MOTEUR", "Compactage du contexte (plein à ${(projected * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt()} %) refait en ${c.ms()} ms")
             }
             val conv = conversation
@@ -437,9 +452,13 @@ class LlmEngine(
                         if (throwable is CancellationException) {
                             NoxLog.i("GEN", "Génération interrompue après $chars caractères")
                             post { l.onDone("interrompu") }
+                        } else if (!retried && chars == 0 && isContextFull(throwable)) {
+                            NoxLog.w("GEN", "Mémoire de travail pleine : reprise sur une conversation allégée", throwable)
+                            busy = true
+                            worker.execute { submitNow(msg, approxChars, transcript, history, l, mode, retried = true) }
                         } else {
                             NoxLog.e("GEN", "Erreur pendant la génération ($mode)", throwable)
-                            post { l.onError(throwable.message ?: "erreur de génération") }
+                            post { l.onError(friendly(throwable)) }
                         }
                     }
                 })
@@ -450,6 +469,13 @@ class LlmEngine(
                 post { l.onError(t.message ?: "erreur") }
             }
         }
+    }
+
+    private fun isContextFull(t: Throwable) = (t.message ?: "").let { it.contains("exceeds available state", true) || it.contains("Status Code: 9") }
+
+    private fun friendly(t: Throwable): String = when {
+        isContextFull(t) -> "Ma mémoire de travail est pleine, même allégée. Raccourcis la demande ou passe le contexte à 8K dans Réglages."
+        else -> "Erreur du moteur : ${t.message ?: "inconnue"}"
     }
 
     /** Remplissage estimé de la mémoire de travail (pour les jauges). */
@@ -504,6 +530,10 @@ class LlmEngine(
 
     companion object {
         const val CHARS_PER_TOKEN = 3.6
+        /** Part de la mémoire de travail qu'on s'autorise à remplir (l'estimation caractères→jetons est approximative). */
+        private const val USABLE = 0.78
+        /** Place gardée pour la réponse (≈ 350 jetons). */
+        private const val ANSWER_RESERVE = 1300
         /** Estimation de la place prise par la description des outils dans le contexte. */
         private const val SKILLS_PROMPT_CHARS = 4200
         /** Jetons audio par seconde (estimation prudente pour la gestion du contexte). */
