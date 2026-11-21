@@ -94,6 +94,9 @@ class JournalDialog(private val a: MainActivity) {
         }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = a.dp(8) })
         actions.addView(a.pillButton("Effacer", filled = false) { NoxLog.clear(); render() },
             LinearLayout.LayoutParams(-2, -2).apply { marginStart = a.dp(8) })
+        body.addView(a.pillButton("🩺 Diagnostic complet", filled = false) { Diagnostic(a).show() }.apply {
+            layoutParams = LinearLayout.LayoutParams(-1, a.dp(44)).apply { bottomMargin = a.dp(6) }
+        })
         body.addView(actions)
 
         @Suppress("DEPRECATION")
@@ -195,6 +198,7 @@ object HelpDialog {
         item("Le neurone en haut à gauche", "Ouvre le menu (favoris, profil, mémoire, documents, modèles, réglages, journal…). Son anneau suit l'état de Nox.")
         item("Le bouton jauge", "RAM, Nox, CPU, GPU et batterie en direct ; « Détail RAM » et « Journal » en bas du panneau.")
         item("Journal de bord", "Performances (temps avant le 1er mot, vitesse, RAG, outils) et erreurs. Bouton Partager pour me l'envoyer.")
+        item("Diagnostic complet", "Menu → Diagnostic complet : Nox teste tout (modèle, réponses, bibliothèque, web, voix, pilotage…) et écrit un rapport dans Téléchargements/Nox à m'envoyer.")
 
         sec("Si ça coince")
         item("Plantage au chargement", "Réglages › Moteur : CPU, contexte 2K, turbo désactivé. Après un plantage GPU, Nox repasse en CPU tout seul.")

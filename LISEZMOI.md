@@ -87,6 +87,7 @@ Menu › Autorisations › **Bouton power** ouvre « Assistant numérique par d�
 
 - **Numéro de version automatique** : `2.2.N`, où N est le numéro du build GitHub. Visible sur l'écran de démarrage et dans Menu › Aide & infos (avec date de build et commit).
 - **Journal de bord** (Menu › Journal de bord, ou Jauges › Journal ›) : chargement du moteur essai par essai, temps avant le 1er mot, jetons/s, durée du RAG, chaque appel d'outil (paramètres, résultat, durée), mémoire libre et température à chaque étape, erreurs avec pile d'appel, plantages Java et raison de la dernière fermeture donnée par Android (y compris plantage natif GPU). Filtres Perfs / Erreurs / Moteur / Outils, résumé chiffré, mode détaillé, bouton Partager.
+- **Diagnostic complet** (Menu › Diagnostic complet, ou Journal › 🩺) : 20 auto-tests — appareil, mémoire/thermique, stockage, modèles, moteur, génération réelle (exactitude, 1er mot, tok/s), calculatrice, aiguillage des messages, commandes « cherche sur internet », bibliothèque (latence, scores cos/BM25), rappel RAG sur ses propres fiches, réseau et recherche web, voix (synthèse et reconnaissance locale), pilotage (accessibilité, notifications, assistant par défaut), autorisations, réglages, conversations, fermetures précédentes (avec traces natives/ANR) et erreurs. Rapport `nox_diagnostic_<date>.txt` (résumé + détails + journal complet) dans Téléchargements/Nox, bouton Partager.
 
 ## Réglages utiles
 
