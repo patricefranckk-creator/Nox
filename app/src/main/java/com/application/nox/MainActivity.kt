@@ -499,8 +499,16 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         loadModel()
     }
 
+    /** Réglage moteur changé pendant un chargement : on recharge dès qu'il est fini. */
+    private var reloadAfterLoad = false
+
     fun loadModel() {
-        if (Nox.loading) return
+        if (Nox.loading) {
+            reloadAfterLoad = true
+            NoxLog.i("MOTEUR", "Changement de moteur demandé pendant le chargement : appliqué dès la fin (${prefs.backend.uppercase()})")
+            toast("Nox finit de se charger : le changement sera appliqué juste après")
+            return
+        }
         Nox.loading = true
         // Garde-fou GPU : la configuration qui a fait planter le pilote est écartée, on tente la suivante, plus légère.
         val pending = prefs.gpuPending
@@ -526,6 +534,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             if (ok) NoxLog.i("APP", "Nox prêt : $msg") else NoxLog.e("APP", "Chargement raté : $msg")
             if (ok) NoxService.start(Nox.app, "${engine.modelLabel} · ${engine.backendLabel}")
             Nox.ui?.onLoaded(ok, msg)
+            if (reloadAfterLoad) { reloadAfterLoad = false; loadModel() }
         }
     }
 

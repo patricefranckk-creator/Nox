@@ -135,6 +135,9 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(a.sectionTitle("Moteur (performances)"))
         val backend = radios(listOf("gpu" to "GPU Adreno (rapide)", "cpu" to "CPU (secours)"), p.backend)
         body.addView(backend)
+        val running = if (a.engine.ready) a.engine.backendLabel.ifBlank { "—" } else "chargement en cours"
+        body.addView(a.text("Moteur actuel : $running" + if (p.gpuBad.isEmpty()) "" else " · GPU écartés après plantage : ${p.gpuBad.joinToString()}",
+            12f, if (p.backend == "gpu" && running.startsWith("CPU")) Ui.AMBER else Ui.MUTED).apply { setPadding(0, a.dp(2), 0, a.dp(6)) })
         val turbo = switch("Turbo MTP (décodage spéculatif)", p.turbo)
         body.addView(turbo)
         val vision = switch("Vue 📷 : Gemma regarde tes photos (+ ~300 Mo de RAM)", p.vision)
@@ -146,38 +149,46 @@ class SettingsDialog(private val a: MainActivity) {
             "Les changements de moteur rechargent le modèle (quelques secondes). Si l'appli se ferme au chargement, passe en CPU ou en contexte 2K.",
             12f, Ui.MUTED).apply { setPadding(0, a.dp(8), 0, 0) })
 
+        var saved = false
+        var cancelled = false
+        fun save() {
+            if (saved || cancelled) return
+            saved = true
+            p.userName = name.text.toString().trim()
+            p.persona = persona.text.toString().trim().ifBlank { Prefs.DEFAULT_PERSONA }
+            p.temperature = temp.progress / 100f
+            p.ragFirst = ragFirst.isChecked
+            p.webSearch = web.isChecked
+            p.autoSpeak = autoSpeak.isChecked
+            p.handsFree = handsFree.isChecked
+            commitVoice()
+            p.backend = checkedTag(backend) ?: "gpu"
+            if (p.backend == "gpu" && oldBackend != "gpu") p.gpuBad = emptySet()
+            p.turbo = turbo.isChecked
+            p.vision = vision.isChecked
+            p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
+            p.listenMode = checkedTag(listen) ?: "native"
+            p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
+            p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
+            p.background = bg.isChecked
+            p.confirmSensitive = confirm.isChecked
+
+            val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen || p.vision != oldVision
+            val reconv = changedPrompt || p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
+            when {
+                reload -> { a.applyLightSettings(); a.loadModel() }
+                reconv -> a.applyConversationSettings()
+                else -> a.applyLightSettings()
+            }
+        }
+
         NoxDialog.sheet(a)
             .setTitle("Réglages")
             .setView(ScrollView(a).apply { addView(body) })
-            .setNegativeButton("Annuler", null)
-            .setPositiveButton("Enregistrer") { _, _ ->
-                p.userName = name.text.toString().trim()
-                p.persona = persona.text.toString().trim().ifBlank { Prefs.DEFAULT_PERSONA }
-                p.temperature = temp.progress / 100f
-                p.ragFirst = ragFirst.isChecked
-                p.webSearch = web.isChecked
-                p.autoSpeak = autoSpeak.isChecked
-                p.handsFree = handsFree.isChecked
-                commitVoice()
-                p.backend = checkedTag(backend) ?: "gpu"
-                if (p.backend == "gpu" && oldBackend != "gpu") p.gpuBad = emptySet()
-                p.turbo = turbo.isChecked
-                p.vision = vision.isChecked
-                p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
-                p.listenMode = checkedTag(listen) ?: "native"
-                p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
-                p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
-                p.background = bg.isChecked
-                p.confirmSensitive = confirm.isChecked
-
-                val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen || p.vision != oldVision
-                val reconv = changedPrompt || p.persona != oldPersona || p.temperature != oldTemp || p.userName != oldName
-                when {
-                    reload -> { a.applyLightSettings(); a.loadModel() }
-                    reconv -> a.applyConversationSettings()
-                    else -> a.applyLightSettings()
-                }
-            }
+            .setNegativeButton("Annuler") { _, _ -> cancelled = true }
+            .setPositiveButton("Enregistrer") { _, _ -> save() }
+            // ✕, retour ou glissement : on enregistre aussi (seul « Annuler » abandonne)
+            .setOnDismissListener { save() }
             .show()
     }
 
