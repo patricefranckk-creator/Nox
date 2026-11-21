@@ -387,9 +387,15 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         decor.addView(splash, FrameLayout.LayoutParams(-1, -1))
         n.scaleX = 0.6f; n.scaleY = 0.6f; n.alpha = 0f
         n.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(650).start()
-        main.postDelayed({
-            splash.animate().alpha(0f).setDuration(320).withEndAction { loading.cancel(); decor.removeView(splash) }.start()
-        }, 1400)
+        var gone = false
+        val hide = {
+            if (!gone) {
+                gone = true
+                splash.animate().alpha(0f).setDuration(320).withEndAction { loading.cancel(); decor.removeView(splash) }.start()
+            }
+        }
+        splash.setOnClickListener { hide() }
+        main.postDelayed({ hide() }, SPLASH_MS)
     }
 
     private val turnActions = object : TurnView.Actions {
@@ -1016,6 +1022,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     companion object {
         /** Marque des réponses tirées directement de la bibliothèque (ligne de stats). */
         const val LIBRARY_ANSWER = "bibliothèque"
+        /** Durée de l'écran de démarrage (un toucher le passe). */
+        const val SPLASH_MS = 10_000L
         /** Envoyé par Freekipedia (« Envoyer à Nox ») avec le fichier .db en données. */
         const val ACTION_IMPORT_FREEKIPEDIA = "com.application.nox.IMPORTER_FREEKIPEDIA"
         const val EXTRA_VOICE = "com.application.nox.VOICE"
