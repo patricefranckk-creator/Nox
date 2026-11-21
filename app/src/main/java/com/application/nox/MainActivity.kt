@@ -504,10 +504,24 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         Nox.loading = true
         // Garde-fou : si le chargement précédent a fait planter l'appli (pilote GPU), on passe en CPU.
         if (prefs.loadInProgress && prefs.backend == "gpu") {
-            prefs.backend = "cpu"
-            NoxLog.e("MOTEUR", "Le démarrage GPU précédent n'est jamais arrivé au bout (plantage natif probable) : passage automatique en CPU")
-            toast("Le dernier démarrage GPU a échoué : passage automatique en CPU (modifiable dans Réglages)")
+            val crash = crashedSince(prefs.loadStartedAt)
+            if (crash == null) {
+                NoxLog.i("MOTEUR", "Chargement précédent interrompu sans plantage (fermeture, mise à jour…) : le GPU reste choisi")
+            } else {
+                prefs.gpuStrikes = prefs.gpuStrikes + 1
+                if (prefs.gpuStrikes >= 2) {
+                    prefs.backend = "cpu"
+                    prefs.gpuStrikes = 0
+                    NoxLog.e("MOTEUR", "Démarrage GPU planté deux fois de suite ($crash) : passage en CPU dans les réglages")
+                    toast("Le GPU a planté deux fois de suite : Nox passe en CPU (modifiable dans Réglages)")
+                } else {
+                    engine.cpuOnce = true
+                    NoxLog.e("MOTEUR", "Le démarrage GPU précédent a planté ($crash) : CPU pour cette fois, GPU retenté au prochain lancement")
+                    toast("Le GPU a planté au dernier démarrage : CPU pour cette fois, le GPU reste choisi")
+                }
+            }
         }
+        prefs.loadStartedAt = System.currentTimeMillis()
         prefs.loadInProgress = true
         voiceOut.stop(); stopListening()
         setMode(NeuronView.State.OFF, "réveil de Nox…")
@@ -515,11 +529,24 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         engine.load(messages.toList(), onStatus = { s -> Nox.ui?.onLoadStatus(s) }) { ok, msg ->
             Nox.loading = false
             prefs.loadInProgress = false
+            if (ok && engine.backendLabel.startsWith("GPU")) prefs.gpuStrikes = 0
             if (ok) NoxLog.i("APP", "Nox prêt : $msg") else NoxLog.e("APP", "Chargement raté : $msg")
             if (ok) NoxService.start(Nox.app, "${engine.modelLabel} · ${engine.backendLabel}")
             Nox.ui?.onLoaded(ok, msg)
         }
     }
+
+    /** Le processus est-il mort d'un plantage (natif, mémoire) depuis ce moment ? Renvoie la raison, ou null. */
+    private fun crashedSince(t: Long): String? = try {
+        val e = getSystemService(android.app.ActivityManager::class.java).getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull()
+        when {
+            e == null || e.timestamp < t -> null
+            e.reason == android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "plantage natif"
+            e.reason == android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "manque de mémoire"
+            e.reason == android.app.ApplicationExitInfo.REASON_CRASH -> "plantage"
+            else -> null
+        }
+    } catch (_: Throwable) { null }
 
     private fun onLoadStatus(s: String) {
         if (mode == NeuronView.State.OFF) { statusText.text = s; voicePage.caption(s) }

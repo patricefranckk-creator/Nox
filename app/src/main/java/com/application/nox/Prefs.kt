@@ -117,6 +117,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("load_in_progress", false)
         set(v) { sp.edit().putBoolean("load_in_progress", v).commit() }
 
+    /** Heure du début du dernier chargement : pour relier un plantage à ce chargement. */
+    var loadStartedAt: Long
+        get() = sp.getLong("load_started_at", 0L)
+        set(v) { sp.edit().putLong("load_started_at", v).commit() }
+
+    /** Plantages GPU consécutifs au démarrage : à 2, Nox repasse en CPU pour de bon. */
+    var gpuStrikes: Int
+        get() = sp.getInt("gpu_strikes", 0)
+        set(v) { sp.edit().putInt("gpu_strikes", v).commit() }
+
     /** Nox reste éveillé en arrière-plan (service de premier plan, notification permanente). */
     var background: Boolean
         get() = sp.getBoolean("background", true)

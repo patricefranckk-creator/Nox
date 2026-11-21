@@ -160,6 +160,7 @@ class SettingsDialog(private val a: MainActivity) {
                 p.handsFree = handsFree.isChecked
                 commitVoice()
                 p.backend = checkedTag(backend) ?: "gpu"
+                if (p.backend == "gpu" && oldBackend != "gpu") p.gpuStrikes = 0
                 p.turbo = turbo.isChecked
                 p.vision = vision.isChecked
                 p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096

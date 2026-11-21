@@ -59,6 +59,8 @@ class LlmEngine(
     @Volatile private var engine: Engine? = null
     @Volatile private var conversation: Conversation? = null
     @Volatile var busy = false; private set
+    /** Charger en CPU pour ce lancement uniquement, sans toucher au réglage. */
+    @Volatile var cpuOnce = false
     @Volatile var ready = false; private set
 
     var backendLabel = ""; private set
@@ -103,7 +105,9 @@ class LlmEngine(
             val multimodal = isGemmaE(file.name)
             val wantAudio = prefs.listenMode == "native" && multimodal
             val wantVision = prefs.vision && multimodal
-            val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true
+            val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true && !cpuOnce
+            if (cpuOnce) NoxLog.i("MOTEUR", "GPU sauté pour ce lancement seulement (plantage au précédent)")
+            cpuOnce = false
             val ctxWanted = minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE)
 
             // Cascade : d'abord tout (oreille + vue), puis on lâche la vue, puis l'oreille, puis le GPU.
