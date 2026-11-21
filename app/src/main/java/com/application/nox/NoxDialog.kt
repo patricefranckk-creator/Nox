@@ -138,8 +138,10 @@ class NoxDialog private constructor(private val ctx: Context, private val sheet:
             content.addView(view, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ctx.dp(8) })
         }
 
-        // Contenu défilant borné à 72 % de l'écran
-        val maxH = (ctx.resources.displayMetrics.heightPixels * (if (sheet) 0.82 else 0.70)).toInt()
+        // Contenu défilant borné : en-tête et boutons restent TOUJOURS visibles à l'écran
+        val hasButtons = pos != null || neg != null || neutral != null
+        val chrome = ctx.dp(if (sheet) 150 else 110) + (if (hasButtons) ctx.dp(80) else 0)
+        val maxH = ((ctx.resources.displayMetrics.heightPixels * 0.90).toInt() - chrome).coerceAtLeast(ctx.dp(200))
         val scroll = object : ScrollView(ctx) {
             override fun onMeasure(w: Int, h: Int) = super.onMeasure(w, View.MeasureSpec.makeMeasureSpec(maxH, View.MeasureSpec.AT_MOST))
         }.apply { isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER; addView(content) }
