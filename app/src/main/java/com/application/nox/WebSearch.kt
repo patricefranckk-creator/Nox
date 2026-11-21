@@ -41,10 +41,18 @@ object WebSearch {
         val clock = NoxLog.chrono()
         var results = try { duckDuckGo(query) } catch (t: Throwable) { NoxLog.w("WEB", "DuckDuckGo indisponible : ${t.message}"); emptyList() }
         if (results.isEmpty()) results = try { wikipedia(query) } catch (t: Throwable) { NoxLog.w("WEB", "Wikipédia indisponible : ${t.message}"); emptyList() }
-        results.take(pages).forEach { r ->
-            if (r.text.isBlank()) r.text = try { pageText(r.url, query) } catch (_: Throwable) { "" }
+        // On lit les pages dans l'ordre jusqu'à en avoir `pages` qui donnent vraiment du texte
+        var read = 0
+        for (r in results.take(pages + 3)) {
+            if (read >= pages) break
+            if (r.text.isBlank()) r.text = try { pageText(r.url, query) } catch (t: Throwable) {
+                NoxLog.d("WEB", "Page illisible ${r.domain} : ${t.message}"); ""
+            }
+            if (r.text.length >= 200) read++
+            NoxLog.d("WEB", "Page ${r.domain} : ${r.text.length} caractères lus")
         }
-        NoxLog.p("WEB", "« $query » : ${results.size} résultats en ${clock.ms()} ms")
+        NoxLog.p("WEB", "« $query » : ${results.size} résultats en ${clock.ms()} ms · pages lues : " +
+            results.filter { it.text.isNotBlank() }.joinToString { "${it.domain} ${it.text.length} car." }.ifBlank { "aucune (extraits courts seulement)" })
         return results
     }
 
@@ -103,8 +111,18 @@ object WebSearch {
         return out
     }
 
+    /** Wikipédia (toutes langues) : texte propre par l'API plutôt que la page HTML. */
+    private fun wikipediaText(url: String): String? {
+        val m = Regex("https?://([a-z]{2,3})(?:\\.m)?\\.wikipedia\\.org/wiki/([^#?]+)").find(url) ?: return null
+        val (lang, title) = m.destructured
+        val e = org.json.JSONObject(get("https://$lang.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=extracts&explaintext=1&exchars=1600&titles=" +
+            URLEncoder.encode(URLDecoder.decode(title, "UTF-8").replace('_', ' '), "UTF-8"), 9000))
+        return e.optJSONObject("query")?.optJSONArray("pages")?.optJSONObject(0)?.optString("extract").orEmpty().replace(Regex("\\s+"), " ").trim()
+    }
+
     /** Texte lisible d'une page, recentré sur les mots de la question. */
     private fun pageText(url: String, query: String): String {
+        wikipediaText(url)?.let { if (it.isNotBlank()) return it.take(1600) }
         var html = get(url, 7000, maxBytes = 600_000)
         html = html.replace(Regex("(?is)<(script|style|noscript|svg|nav|footer|header|form|aside)[^>]*>.*?</\\1>"), " ")
         val paragraphs = Regex("(?is)<(p|li|h[1-4]|td)[^>]*>(.*?)</\\1>").findAll(html)
@@ -115,12 +133,14 @@ object WebSearch {
             val f = Text.fold(p)
             terms.count { f.contains(it) } * 10 - i * 0.05
         }
+        // Les paragraphes les plus pertinents jusqu'à ~1400 caractères ; un trop long est coupé, pas sauté
         val sb = StringBuilder()
         for ((_, p) in ranked) {
-            if (sb.length + p.length > 1400) break
-            sb.append(p).append(' ')
+            val room = 1400 - sb.length
+            if (room < 80) break
+            sb.append(if (p.length <= room) p else p.take(room).substringBeforeLast(' ') + "…").append(' ')
         }
-        return sb.toString().trim().ifBlank { all.first().take(1400) }
+        return sb.toString().trim()
     }
 
     private fun clean(s: String): String = android.text.Html.fromHtml(s.replace(Regex("<[^>]+>"), " "), android.text.Html.FROM_HTML_MODE_LEGACY)
