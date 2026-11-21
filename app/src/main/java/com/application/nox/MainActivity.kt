@@ -502,24 +502,18 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     fun loadModel() {
         if (Nox.loading) return
         Nox.loading = true
-        // Garde-fou : si le chargement précédent a fait planter l'appli (pilote GPU), on passe en CPU.
-        if (prefs.loadInProgress && prefs.backend == "gpu") {
+        // Garde-fou GPU : la configuration qui a fait planter le pilote est écartée, on tente la suivante, plus légère.
+        val pending = prefs.gpuPending
+        if (pending.isNotEmpty()) {
             val crash = crashedSince(prefs.loadStartedAt)
-            if (crash == null) {
-                NoxLog.i("MOTEUR", "Chargement précédent interrompu sans plantage (fermeture, mise à jour…) : le GPU reste choisi")
+            if (crash != null) {
+                prefs.gpuBad = prefs.gpuBad + pending
+                NoxLog.e("MOTEUR", "Le GPU a planté ($crash) avec $pending : configuration écartée, essai d'une version plus légère · écartées : ${prefs.gpuBad.joinToString()}")
+                toast("Le GPU a planté avec $pending : Nox essaie une configuration GPU plus légère")
             } else {
-                prefs.gpuStrikes = prefs.gpuStrikes + 1
-                if (prefs.gpuStrikes >= 2) {
-                    prefs.backend = "cpu"
-                    prefs.gpuStrikes = 0
-                    NoxLog.e("MOTEUR", "Démarrage GPU planté deux fois de suite ($crash) : passage en CPU dans les réglages")
-                    toast("Le GPU a planté deux fois de suite : Nox passe en CPU (modifiable dans Réglages)")
-                } else {
-                    engine.cpuOnce = true
-                    NoxLog.e("MOTEUR", "Le démarrage GPU précédent a planté ($crash) : CPU pour cette fois, GPU retenté au prochain lancement")
-                    toast("Le GPU a planté au dernier démarrage : CPU pour cette fois, le GPU reste choisi")
-                }
+                NoxLog.i("MOTEUR", "Démarrage GPU $pending interrompu sans plantage (fermeture, mise à jour…) : rien d'écarté")
             }
+            prefs.gpuPending = ""
         }
         prefs.loadStartedAt = System.currentTimeMillis()
         prefs.loadInProgress = true
@@ -529,7 +523,6 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         engine.load(messages.toList(), onStatus = { s -> Nox.ui?.onLoadStatus(s) }) { ok, msg ->
             Nox.loading = false
             prefs.loadInProgress = false
-            if (ok && engine.backendLabel.startsWith("GPU")) prefs.gpuStrikes = 0
             if (ok) NoxLog.i("APP", "Nox prêt : $msg") else NoxLog.e("APP", "Chargement raté : $msg")
             if (ok) NoxService.start(Nox.app, "${engine.modelLabel} · ${engine.backendLabel}")
             Nox.ui?.onLoaded(ok, msg)

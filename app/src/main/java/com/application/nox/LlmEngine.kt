@@ -51,7 +51,9 @@ class LlmEngine(
         fun onSuggestions(list: List<String>) {}
     }
 
-    private data class Attempt(val kind: String, val mtp: Boolean, val ctx: Int, val audio: Boolean, val vision: Boolean)
+    private data class Attempt(val kind: String, val mtp: Boolean, val ctx: Int, val audio: Boolean, val vision: Boolean) {
+        fun key() = kind + (if (mtp) "+MTP" else "") + (if (audio) "+A" else "") + (if (vision) "+V" else "") + "/" + ctx
+    }
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "nox-llm").apply { priority = Thread.MAX_PRIORITY } }
     private val main = Handler(Looper.getMainLooper())
@@ -59,8 +61,6 @@ class LlmEngine(
     @Volatile private var engine: Engine? = null
     @Volatile private var conversation: Conversation? = null
     @Volatile var busy = false; private set
-    /** Charger en CPU pour ce lancement uniquement, sans toucher au réglage. */
-    @Volatile var cpuOnce = false
     @Volatile var ready = false; private set
 
     var backendLabel = ""; private set
@@ -105,27 +105,29 @@ class LlmEngine(
             val multimodal = isGemmaE(file.name)
             val wantAudio = prefs.listenMode == "native" && multimodal
             val wantVision = prefs.vision && multimodal
-            val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true && !cpuOnce
-            if (cpuOnce) NoxLog.i("MOTEUR", "GPU sauté pour ce lancement seulement (plantage au précédent)")
-            cpuOnce = false
+            val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true
             val ctxWanted = minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE)
 
-            // Cascade : d'abord tout (oreille + vue), puis on lâche la vue, puis l'oreille, puis le GPU.
+            // Cascade : toutes les variantes GPU, de la plus complète à la plus légère, puis le CPU.
             val attempts = mutableListOf<Attempt>()
             val modes = linkedSetOf(wantAudio to wantVision, wantAudio to false, false to false).toList()
+            if (wantGpu) for ((audio, vision) in modes) {
+                if (mtpCapable) attempts += Attempt("GPU", true, ctxWanted, audio, vision)
+                attempts += Attempt("GPU", false, ctxWanted, audio, vision)
+            }
             for ((audio, vision) in modes) {
-                if (wantGpu) {
-                    if (mtpCapable) attempts += Attempt("GPU", true, ctxWanted, audio, vision)
-                    attempts += Attempt("GPU", false, ctxWanted, audio, vision)
-                }
-                if (mtpCapable && !wantGpu) attempts += Attempt("CPU", true, ctxWanted, audio, vision)
+                if (mtpCapable) attempts += Attempt("CPU", true, ctxWanted, audio, vision)
                 attempts += Attempt("CPU", false, ctxWanted, audio, vision)
             }
             if (ctxWanted > 4096) attempts += Attempt("CPU", false, 4096, false, false)
 
             NoxLog.d("MOTEUR", "Cascade prévue : " + attempts.joinToString(" → ") { "${it.kind}${if (it.mtp) "+MTP" else ""}${if (it.audio) "+A" else ""}${if (it.vision) "+V" else ""}/${it.ctx}" })
             var lastErr: Throwable? = null
+            val bad = prefs.gpuBad
             for ((idx, a) in attempts.withIndex()) {
+                val key = a.key()
+                if (a.kind == "GPU" && key in bad) { NoxLog.i("MOTEUR", "Essai ${idx + 1} sauté : $key a déjà fait planter le pilote GPU"); continue }
+                if (a.kind == "GPU") prefs.gpuPending = key
                 post { onStatus("Démarrage ${a.kind}${if (a.mtp) " + turbo" else ""}${if (a.audio) " + oreille" else ""}${if (a.vision) " + vue" else ""}…") }
                 val t0 = System.currentTimeMillis()
                 try {
@@ -138,6 +140,7 @@ class LlmEngine(
                         "${a.kind}${if (a.mtp) "+MTP" else ""} · oreille=${a.audio} · vue=${a.vision} · contexte=${a.ctx}")
                     break
                 } catch (t: Throwable) {
+                    if (a.kind == "GPU") prefs.gpuPending = ""
                     NoxLog.w("MOTEUR", "Essai ${idx + 1} échoué en ${System.currentTimeMillis() - t0} ms (${a.kind}${if (a.mtp) "+MTP" else ""}, oreille=${a.audio}, vue=${a.vision})", t)
                     lastErr = t
                 }
@@ -153,10 +156,12 @@ class LlmEngine(
                 conversation = newConversation(history)
                 NoxLog.p("MOTEUR", "Conversation prête en ${prefill.ms()} ms (consigne + ${if (skillsActive) "outils + " else ""}historique pré-calculés, ≈${(charsInContext / CHARS_PER_TOKEN).toInt()} jetons)")
                 NoxLog.p("MOTEUR", "Chargement total ${loadClock.ms()} ms · ${NoxLog.memSnapshot()}")
+                prefs.gpuPending = ""
                 ready = true
                 val extras = listOfNotNull(if (audioReady) "oreille" else null, if (visionReady) "vue" else null, if (skillsActive) "compétences" else null)
                 post { onResult(true, "$modelLabel · $backendLabel" + if (extras.isEmpty()) "" else " · " + extras.joinToString(" + ")) }
             } catch (t: Throwable) {
+                prefs.gpuPending = ""
                 NoxLog.e("MOTEUR", "Création de la conversation impossible", t)
                 closeInternal()
                 post { onResult(false, "Erreur conversation : ${t.message}") }

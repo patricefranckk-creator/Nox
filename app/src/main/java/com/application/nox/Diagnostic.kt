@@ -267,6 +267,8 @@ class Diagnostic(private val a: MainActivity) {
         c.line("Modèle : ${en.modelLabel.ifBlank { "—" }} · moteur : ${en.backendLabel.ifBlank { "—" }}")
         c.line("Audio natif : ${oui(en.audioReady)} · vision : ${oui(en.visionReady)} · outils actifs : ${oui(en.skillsActive)}")
         c.line("Contexte rempli : ${en.contextPct()} % · réglage ${Nox.prefs.contextTokens} jetons · backend demandé ${Nox.prefs.backend} · turbo ${oui(Nox.prefs.turbo)}")
+        c.line("Configurations GPU écartées (plantage du pilote) : ${Nox.prefs.gpuBad.joinToString().ifBlank { "aucune" }}")
+        if (Nox.prefs.backend == "gpu" && en.backendLabel.startsWith("CPU")) c.warn("GPU choisi mais le moteur tourne en CPU")
         if (!en.ready) c.fail("Le modèle n'est pas chargé : les tests de génération seront sautés")
         else if (en.backendLabel.contains("CPU", true)) c.warn("Le modèle tourne sur CPU : plus lent qu'en GPU")
         c.summary = if (en.ready) "${en.modelLabel} · ${en.backendLabel}" else "non chargé"

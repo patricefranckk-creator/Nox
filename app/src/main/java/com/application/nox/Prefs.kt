@@ -13,7 +13,7 @@ class Prefs(ctx: Context) {
     /** "gpu" (rapide, défaut) ou "cpu" (secours). */
     var backend: String
         get() = sp.getString("backend", "gpu") ?: "gpu"
-        set(v) = sp.edit().putString("backend", v).apply()
+        set(v) { sp.edit().putString("backend", v).commit() }
 
     /** Décodage spéculatif MTP (jusqu'à ~1,7× plus rapide sur Gemma 4). */
     var turbo: Boolean
@@ -122,10 +122,15 @@ class Prefs(ctx: Context) {
         get() = sp.getLong("load_started_at", 0L)
         set(v) { sp.edit().putLong("load_started_at", v).commit() }
 
-    /** Plantages GPU consécutifs au démarrage : à 2, Nox repasse en CPU pour de bon. */
-    var gpuStrikes: Int
-        get() = sp.getInt("gpu_strikes", 0)
-        set(v) { sp.edit().putInt("gpu_strikes", v).commit() }
+    /** Configuration GPU en cours de démarrage (ex. « GPU+MTP+A+V/4096 ») : si l'appli meurt, c'est elle. */
+    var gpuPending: String
+        get() = sp.getString("gpu_pending", "") ?: ""
+        set(v) { sp.edit().putString("gpu_pending", v).commit() }
+
+    /** Configurations GPU qui ont fait planter le pilote : la cascade les saute. */
+    var gpuBad: Set<String>
+        get() = sp.getStringSet("gpu_bad", emptySet())?.toSet() ?: emptySet()
+        set(v) { sp.edit().putStringSet("gpu_bad", v).commit() }
 
     /** Nox reste éveillé en arrière-plan (service de premier plan, notification permanente). */
     var background: Boolean
