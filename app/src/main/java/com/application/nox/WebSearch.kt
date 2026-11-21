@@ -37,7 +37,7 @@ object WebSearch {
     }
 
     /** Résultats + texte des meilleures pages. Appelé hors du fil principal. */
-    fun search(query: String, pages: Int = 3): List<Result> {
+    fun search(query: String, pages: Int = 4): List<Result> {
         val clock = NoxLog.chrono()
         var results = try { duckDuckGo(query) } catch (t: Throwable) { NoxLog.w("WEB", "DuckDuckGo indisponible : ${t.message}"); emptyList() }
         if (results.isEmpty()) results = try { wikipedia(query) } catch (t: Throwable) { NoxLog.w("WEB", "Wikipédia indisponible : ${t.message}"); emptyList() }
@@ -56,12 +56,14 @@ object WebSearch {
         return results
     }
 
-    /** Bloc de contexte donné au modèle. */
+    /** Bloc de contexte donné au modèle, réparti équitablement entre les pages. */
     fun contextBlock(query: String, results: List<Result>, maxChars: Int = 3600): String {
+        val useful = results.take(5).count { it.text.isNotBlank() || it.snippet.isNotBlank() }.coerceAtLeast(1)
+        val perPage = ((maxChars - 260) / useful).coerceAtLeast(300)
         val sb = StringBuilder("[Résultats d'une recherche sur internet pour « $query ». Réponds à la question en t'appuyant uniquement sur ces extraits, " +
             "en quelques phrases naturelles, sans citer d'URL ni de numéros ; si les extraits ne répondent pas, dis-le simplement.]\n")
         for (r in results.take(5)) {
-            val body = (r.text.ifBlank { r.snippet }).replace('\n', ' ').trim()
+            val body = (r.text.ifBlank { r.snippet }).replace('\n', ' ').trim().let { if (it.length > perPage) it.take(perPage).substringBeforeLast(' ') + "…" else it }
             if (body.isBlank()) continue
             val line = "• ${r.title} (${r.domain}) : ${body}\n"
             if (sb.length + line.length > maxChars) { if (sb.length < maxChars - 300) sb.append(line.take(maxChars - sb.length - 2)).append("…\n"); break }
@@ -115,14 +117,14 @@ object WebSearch {
     private fun wikipediaText(url: String): String? {
         val m = Regex("https?://([a-z]{2,3})(?:\\.m)?\\.wikipedia\\.org/wiki/([^#?]+)").find(url) ?: return null
         val (lang, title) = m.destructured
-        val e = org.json.JSONObject(get("https://$lang.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=extracts&explaintext=1&exchars=1600&titles=" +
+        val e = org.json.JSONObject(get("https://$lang.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=extracts&explaintext=1&exchars=3000&titles=" +
             URLEncoder.encode(URLDecoder.decode(title, "UTF-8").replace('_', ' '), "UTF-8"), 9000))
         return e.optJSONObject("query")?.optJSONArray("pages")?.optJSONObject(0)?.optString("extract").orEmpty().replace(Regex("\\s+"), " ").trim()
     }
 
     /** Texte lisible d'une page, recentré sur les mots de la question. */
     private fun pageText(url: String, query: String): String {
-        wikipediaText(url)?.let { if (it.isNotBlank()) return it.take(1600) }
+        wikipediaText(url)?.let { if (it.isNotBlank()) return it.take(3000) }
         var html = get(url, 7000, maxBytes = 600_000)
         html = html.replace(Regex("(?is)<(script|style|noscript|svg|nav|footer|header|form|aside)[^>]*>.*?</\\1>"), " ")
         val paragraphs = Regex("(?is)<(p|li|h[1-4]|td)[^>]*>(.*?)</\\1>").findAll(html)
@@ -136,7 +138,7 @@ object WebSearch {
         // Les paragraphes les plus pertinents jusqu'à ~1400 caractères ; un trop long est coupé, pas sauté
         val sb = StringBuilder()
         for ((_, p) in ranked) {
-            val room = 1400 - sb.length
+            val room = 3000 - sb.length
             if (room < 80) break
             sb.append(if (p.length <= room) p else p.take(room).substringBeforeLast(' ') + "…").append(' ')
         }

@@ -60,21 +60,21 @@ class Skills(private val ctx: Context, private val library: Library) {
     // ================================================================ catalogue
 
     val all: List<Skill> = listOf(
-        Skill("heure_date", "Heure et date", "Heure, date et jour actuels.", obj()) {
+        Skill("heure_date", "Heure et date", "Heure et date.", obj()) {
             used("🕒 heure")
             SimpleDateFormat("EEEE d MMMM yyyy, HH'h'mm", Locale.FRANCE).format(Date())
         },
 
-        Skill("calculer", "Calculatrice", "Calcul exact. À utiliser pour TOUT calcul (+ - * / ^ %, parenthèses, sqrt, « 20% de 150 »).",
-            obj("expression" to str("expression mathématique"))) { p ->
+        Skill("calculer", "Calculatrice", "Calcul exact (+ - * / ^ % sqrt).",
+            obj("expression" to str(""))) { p ->
             val e = p.optString("expression")
             used("🧮 $e")
             MathEval.format(MathEval.eval(e))
         },
 
-        Skill("horloge", "Minuteur & réveil", "Lance un minuteur ou programme une alarme dans l'appli Horloge.",
-            obj("action" to enum("minuteur", "alarme"), "secondes" to int("durée du minuteur en secondes"),
-                "heure" to int("heure de l'alarme 0-23"), "minute" to int("minute de l'alarme 0-59"), "nom" to str("libellé"),
+        Skill("horloge", "Minuteur & réveil", "Minuteur ou alarme.",
+            obj("action" to enum("minuteur", "alarme"), "secondes" to int(""),
+                "heure" to int("0-23"), "minute" to int("0-59"), "nom" to str(""),
                 required = listOf("action"))) { p ->
             if (p.optString("action") == "minuteur") {
                 val s = p.optInt("secondes", 0)
@@ -93,9 +93,9 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("rappel", "Rappels", "Programme un rappel : une notification de Nox à un moment donné (dans X minutes, ou à une heure précise).",
-            obj("texte" to str("ce qu'il faut rappeler"), "dans_minutes" to int("délai en minutes"),
-                "heure" to int("heure 0-23 (si heure précise)"), "minute" to int("minute 0-59"), required = listOf("texte"))) { p ->
+        Skill("rappel", "Rappels", "Rappel à une heure ou dans X minutes.",
+            obj("texte" to str(""), "dans_minutes" to int(""),
+                "heure" to int("0-23"), "minute" to int("minute 0-59"), required = listOf("texte"))) { p ->
             val txt = p.optString("texte").trim()
             require(txt.isNotEmpty()) { "texte vide" }
             val at: Long = if (p.has("heure")) {
@@ -110,9 +110,9 @@ class Skills(private val ctx: Context, private val library: Library) {
             "Rappel programmé pour $label : $txt"
         },
 
-        Skill("notes", "Notes & listes", "Gère les listes de l'utilisateur (courses, idées, à faire…) : ajouter, lire, retirer un élément, vider.",
-            obj("action" to enum("ajouter", "lire", "retirer", "vider"), "liste" to str("nom de la liste, ex: courses"),
-                "texte" to str("élément(s) à ajouter ou retirer"), required = listOf("action"))) { p ->
+        Skill("notes", "Notes & listes", "Listes (courses, à faire…).",
+            obj("action" to enum("ajouter", "lire", "retirer", "vider"), "liste" to str("ex: courses"),
+                "texte" to str(""), required = listOf("action"))) { p ->
             val list = p.optString("liste").lowercase(Locale.FRANCE).trim().ifEmpty { "notes" }
             val all = loadNotes()
             val arr = all.optJSONArray(list) ?: JSONArray()
@@ -146,8 +146,8 @@ class Skills(private val ctx: Context, private val library: Library) {
             res
         },
 
-        Skill("memoire", "Mémoire longue", "Retient ou oublie durablement un fait sur l'utilisateur (préférence, proche, habitude). Quand il dit « retiens », « souviens-toi », « oublie ».",
-            obj("action" to enum("retenir", "oublier"), "texte" to str("le fait (retenir) ou un mot-clé (oublier)"))) { p ->
+        Skill("memoire", "Mémoire longue", "Retenir ou oublier un fait durable sur l'utilisateur.",
+            obj("action" to enum("retenir", "oublier"), "texte" to str(""))) { p ->
             val t = p.optString("texte").trim()
             require(t.isNotEmpty()) { "texte vide" }
             if (p.optString("action") == "oublier") {
@@ -156,15 +156,15 @@ class Skills(private val ctx: Context, private val library: Library) {
             } else { memory.add(t); used("🧠 retenu"); "Retenu : $t" }
         },
 
-        Skill("bibliotheque", "Bibliothèque", "Cherche dans la bibliothèque de l'utilisateur : documents, fiches encyclopédiques (Freekipedia), notes et anciennes conversations. Pour une question de connaissances ou quand il évoque quelque chose déjà dit, écrit ou importé.",
-            obj("requete" to str("mots-clés ou question précise"))) { p ->
+        Skill("bibliotheque", "Bibliothèque", "Cherche dans ses documents, fiches et anciennes conversations.",
+            obj("requete" to str(""))) { p ->
             val hits = library.search(p.optString("requete"), k = 4, excludeChatsAfter = conversationStart)
             used("📚 ${hits.size} extrait(s)")
             if (hits.isEmpty()) "Rien trouvé dans la bibliothèque." else hits.joinToString("\n") { "• ${it.chunk.title} : ${it.chunk.text}" }.take(2400)
         },
 
-        Skill("musique", "Musique", "Contrôle la musique : jouer un titre/artiste/playlist, pause, reprendre, suivant, précédent.",
-            obj("action" to enum("jouer", "pause", "reprendre", "suivant", "precedent"), "recherche" to str("titre, artiste ou playlist"),
+        Skill("musique", "Musique", "Musique.",
+            obj("action" to enum("jouer", "pause", "reprendre", "suivant", "precedent"), "recherche" to str(""),
                 required = listOf("action"))) { p ->
             when (p.optString("action")) {
                 "jouer" -> {
@@ -183,8 +183,8 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("contacter", "Appels & SMS", "Prépare un appel ou un SMS vers un contact ou un numéro. L'utilisateur valide lui-même.",
-            obj("mode" to enum("appel", "sms"), "destinataire" to str("nom du contact ou numéro"), "message" to str("texte du SMS"),
+        Skill("contacter", "Appels & SMS", "Appel ou SMS.",
+            obj("mode" to enum("appel", "sms"), "destinataire" to str(""), "message" to str(""),
                 required = listOf("mode", "destinataire"))) { p ->
             val who = p.optString("destinataire").trim()
             val number = if (who.count { it.isDigit() } >= 6) who else lookupNumber(who) ?: return@Skill missingContact(who)
@@ -197,8 +197,8 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("itineraire", "Itinéraire", "Ouvre la navigation GPS vers une destination.",
-            obj("destination" to str("adresse ou lieu"), "mode" to enum("voiture", "pied", "velo", "transports"), required = listOf("destination"))) { p ->
+        Skill("itineraire", "Itinéraire", "Navigation GPS.",
+            obj("destination" to str(""), "mode" to enum("voiture", "pied", "velo", "transports"), required = listOf("destination"))) { p ->
             val dest = p.optString("destination")
             val m = when (p.optString("mode")) { "pied" -> "w"; "velo" -> "b"; "transports" -> "r"; else -> "d" }
             val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=${Uri.encode(dest)}&mode=$m"))
@@ -207,8 +207,8 @@ class Skills(private val ctx: Context, private val library: Library) {
             used("🧭 $dest"); "Itinéraire vers $dest ouvert."
         },
 
-        Skill("ouvrir", "Ouvrir", "Ouvre une application installée (par son nom) ou une page système : wifi, bluetooth, son, affichage, batterie, localisation, appareil photo, réglages.",
-            obj("cible" to str("nom de l'appli ou page système"))) { p ->
+        Skill("ouvrir", "Ouvrir", "Ouvre une appli ou un réglage (wifi, bluetooth, son…).",
+            obj("cible" to str(""))) { p ->
             val raw = p.optString("cible")
             val q = norm(raw)
             val sys = when {
@@ -234,8 +234,8 @@ class Skills(private val ctx: Context, private val library: Library) {
             used("📲 $label"); "$label ouverte."
         },
 
-        Skill("telephone", "Téléphone", "Lampe torche, volume multimédia, ou état du téléphone (batterie, mémoire, stockage).",
-            obj("action" to enum("lampe_allumer", "lampe_eteindre", "volume", "etat"), "valeur" to int("volume en pourcentage 0-100"),
+        Skill("telephone", "Téléphone", "Lampe, volume, état du téléphone.",
+            obj("action" to enum("lampe_allumer", "lampe_eteindre", "volume", "etat"), "valeur" to int("0-100"),
                 required = listOf("action"))) { p ->
             when (p.optString("action")) {
                 "lampe_allumer", "lampe_eteindre" -> {
@@ -264,10 +264,10 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("agenda", "Agenda", "Lit les prochains rendez-vous de l'agenda, ou prépare un nouvel événement (l'utilisateur valide à l'écran).",
-            obj("action" to enum("lire", "ajouter"), "jours" to int("lire : combien de jours à venir, 1 = aujourd'hui"),
-                "titre" to str("titre"), "date" to str("date AAAA-MM-JJ"), "heure" to str("heure HH:MM, vide si toute la journée"),
-                "duree_minutes" to int("durée, 60 par défaut"), required = listOf("action"))) { p ->
+        Skill("agenda", "Agenda", "Agenda : lire ou ajouter.",
+            obj("action" to enum("lire", "ajouter"), "jours" to int("1 = aujourd'hui"),
+                "titre" to str(""), "date" to str("AAAA-MM-JJ"), "heure" to str("HH:MM"),
+                "duree_minutes" to int(""), required = listOf("action"))) { p ->
             if (p.optString("action") == "lire") readAgenda(p.optInt("jours", 1).coerceIn(1, 31)) else {
                 val cal = Calendar.getInstance()
                 cal.time = SimpleDateFormat("yyyy-MM-dd", Locale.FRANCE).parse(p.optString("date")) ?: error("date invalide")
@@ -287,10 +287,10 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("ecran", "Pilotage des applis", "Pilote l'écran de n'importe quelle appli : lire ce qui s'affiche (éléments numérotés), toucher un bouton par son texte ou son numéro, écrire dans un champ, faire défiler, retour, accueil, applis récentes, volet des notifications, réglages rapides, verrouiller, capture d'écran. Ouvre d'abord l'appli avec « ouvrir », puis « lire » avant d'agir.",
+        Skill("ecran", "Pilotage des applis", "Pilote l'écran d'une appli : « lire » d'abord, puis agir.",
             obj("action" to enum("lire", "toucher", "appui_long", "ecrire", "defiler_bas", "defiler_haut", "retour", "accueil", "recents", "notifications", "reglages_rapides", "verrouiller", "capture"),
-                "cible" to str("texte du bouton ou du champ visé"), "numero" to int("numéro de l'élément donné par « lire »"),
-                "texte" to str("texte à écrire"), "confirme" to bool("true seulement si l'utilisateur a confirmé une action sensible (envoyer, payer, supprimer…)"),
+                "cible" to str("texte visé"), "numero" to int("donné par lire"),
+                "texte" to str(""), "confirme" to bool("true si l'utilisateur a confirmé"),
                 required = listOf("action"))) { p ->
             val acc = NoxAccess.instance
             if (acc == null) {
@@ -315,9 +315,9 @@ class Skills(private val ctx: Context, private val library: Library) {
             }
         },
 
-        Skill("notifications", "Notifications", "Lit les notifications reçues (messages, mails, applis), répond directement à un message, ouvre ou efface une notification.",
-            obj("action" to enum("lire", "repondre", "ouvrir", "effacer", "tout_effacer"), "appli" to str("filtrer par appli, ex: WhatsApp"),
-                "numero" to int("numéro donné par « lire »"), "texte" to str("texte de la réponse"), required = listOf("action"))) { p ->
+        Skill("notifications", "Notifications", "Notifications : lire, répondre, ouvrir, effacer.",
+            obj("action" to enum("lire", "repondre", "ouvrir", "effacer", "tout_effacer"), "appli" to str("ex: WhatsApp"),
+                "numero" to int("donné par lire"), "texte" to str(""), required = listOf("action"))) { p ->
             val n = NoxNotifs.instance
             if (n == null) {
                 start(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -339,8 +339,8 @@ class Skills(private val ctx: Context, private val library: Library) {
         },
 
         Skill("internet", "Recherche sur internet",
-            "Cherche sur internet et renvoie des extraits des pages trouvées. Seulement quand l'utilisateur demande de chercher sur internet, le net, la toile ou le web, ou pour une info récente que tu ne peux pas connaître.",
-            obj("requete" to str("ce qu'il faut chercher, en quelques mots"), required = listOf("requete"))) { p ->
+            "Recherche sur internet (quand on le demande, ou info récente).",
+            obj("requete" to str(""), required = listOf("requete"))) { p ->
             val q = p.optString("requete").trim()
             require(q.isNotEmpty()) { "requête vide" }
             if (!Nox.prefs.webSearch) return@Skill "La recherche sur internet est désactivée dans les réglages de Nox. Dis-le à l'utilisateur."
@@ -349,11 +349,11 @@ class Skills(private val ctx: Context, private val library: Library) {
             val list = results.take(5).map { it.title + TurnView.SEP + it.url }
             main.post { onSources?.invoke(list) }
             used("🌐 recherche sur internet")
-            WebSearch.contextBlock(q, results)
+            WebSearch.contextBlock(q, results, Nox.engine.contextBudget(0).coerceAtMost(5000))
         },
 
-        Skill("partager", "Partager & copier", "Partage un texte vers une autre appli, le copie dans le presse-papier, ou lance une recherche web dans le navigateur.",
-            obj("action" to enum("partager", "copier", "recherche_web"), "texte" to str("texte ou requête"))) { p ->
+        Skill("partager", "Partager & copier", "Partager ou copier un texte.",
+            obj("action" to enum("partager", "copier", "recherche_web"), "texte" to str(""))) { p ->
             val t = p.optString("texte")
             when (p.optString("action")) {
                 "copier" -> {
@@ -476,9 +476,9 @@ class Skills(private val ctx: Context, private val library: Library) {
     }
 
     companion object {
-        fun str(d: String): JSONObject = JSONObject().put("type", "string").put("description", d)
-        fun int(d: String): JSONObject = JSONObject().put("type", "integer").put("description", d)
-        fun bool(d: String): JSONObject = JSONObject().put("type", "boolean").put("description", d)
+        fun str(d: String): JSONObject = JSONObject().put("type", "string").apply { if (d.isNotEmpty()) put("description", d) }
+        fun int(d: String): JSONObject = JSONObject().put("type", "integer").apply { if (d.isNotEmpty()) put("description", d) }
+        fun bool(d: String): JSONObject = JSONObject().put("type", "boolean").apply { if (d.isNotEmpty()) put("description", d) }
         fun enum(vararg v: String): JSONObject = JSONObject().put("type", "string").put("enum", JSONArray(v.toList()))
 
         fun obj(vararg props: Pair<String, JSONObject>, required: List<String>? = null): JSONObject {

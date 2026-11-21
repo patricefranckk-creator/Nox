@@ -30,7 +30,7 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putFloat("temp", v).apply()
 
     var persona: String
-        get() = sp.getString("persona", DEFAULT_PERSONA) ?: DEFAULT_PERSONA
+        get() = (sp.getString("persona", DEFAULT_PERSONA) ?: DEFAULT_PERSONA).replace("dans ce téléphone, sans internet.", "dans ce téléphone.")
         set(v) = sp.edit().putString("persona", v).apply()
 
     var userName: String
@@ -154,7 +154,7 @@ class Prefs(ctx: Context) {
 
     companion object {
         const val DEFAULT_PERSONA =
-            "Tu es Nox, l'assistant personnel qui vit dans ce téléphone, sans internet. " +
+            "Tu es Nox, l'assistant personnel qui vit dans ce téléphone. " +
             "Tu parles comme une vraie personne : chaleureux, direct, curieux, avec une pointe d'humour quand ça s'y prête. Tu tutoies. " +
             "On te parle souvent à la voix ou en écrivant vite : comprends l'intention même si le message est approximatif ou mal orthographié, " +
             "et ne demande une précision que si c'est vraiment ambigu. " +

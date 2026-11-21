@@ -119,7 +119,11 @@ class LlmEngine(
                 if (mtpCapable) attempts += Attempt("CPU", true, ctxWanted, audio, vision)
                 attempts += Attempt("CPU", false, ctxWanted, audio, vision)
             }
-            if (ctxWanted > 4096) attempts += Attempt("CPU", false, 4096, false, false)
+            // Contexte large refusé (mémoire) : on retente en 4K, GPU d'abord
+            if (ctxWanted > 4096) {
+                if (wantGpu) attempts += Attempt("GPU", false, 4096, wantAudio, false)
+                attempts += Attempt("CPU", false, 4096, false, false)
+            }
 
             NoxLog.d("MOTEUR", "Cascade prévue : " + attempts.joinToString(" → ") { "${it.kind}${if (it.mtp) "+MTP" else ""}${if (it.audio) "+A" else ""}${if (it.vision) "+V" else ""}/${it.ctx}" })
             var lastErr: Throwable? = null
@@ -230,21 +234,13 @@ class LlmEngine(
         sb.append("\n\nNous sommes le ").append(now).append('.')
         if (prefs.userName.isNotBlank()) sb.append(" Ton interlocuteur s'appelle ").append(prefs.userName.trim()).append('.')
         if (withSkills) {
-            sb.append("\n\nTu agis vraiment sur le téléphone grâce à tes outils. Dès qu'on te demande une action ou une info du téléphone ")
-                .append("(heure, minuteur, rappel, liste, musique, appel, SMS, trajet, appli, réglage, agenda…), appelle l'outil au lieu de répondre de tête. ")
-                .append("Tout calcul passe par « calculer ». Pour une question de connaissances (définition, histoire, santé, pratique…) ou si l'utilisateur évoque quelque chose qu'il t'a déjà dit, noté ou importé, cherche d'abord dans « bibliotheque ». ")
-                .append("Pour piloter une autre appli (WhatsApp, Gmail, YouTube, réglages…), mène la tâche jusqu'au bout tout seul : « ouvrir » l'appli, « ecran » lire, ")
-                .append("puis toucher, écrire, faire défiler, revenir, en relisant l'écran après chaque geste et en corrigeant si besoin. ")
-                .append("Juste avant d'envoyer, d'appeler, de payer ou de supprimer, arrête-toi et demande dans le chat, en une phrase, si tu peux le faire en résumant ce qui va partir ; ")
-                .append("à « oui », « vas-y » ou « envoie », termine avec confirme=true ; à « non » ou « annule », n'envoie rien. ")
-                .append("Si l'utilisateur demande de chercher sur internet, le net, la toile ou le web, utilise « internet » puis réponds avec tes mots, sans URL. ")
-                .append("Pour les messages reçus, utilise « notifications ». ")
-                .append("Après une action, confirme en une phrase naturelle, sans détailler l'outil.")
+            sb.append("\n\nPour toute action ou info du téléphone, appelle l'outil au lieu de répondre de tête ; tout calcul passe par « calculer ». ")
+                .append("Pour piloter une appli : « ouvrir », puis « ecran » lire, agir, relire après chaque geste, jusqu'au bout. ")
+                .append("Avant d'envoyer, appeler, payer ou supprimer, demande confirmation en une phrase ; si oui, confirme=true. ")
+                .append("Après une action, confirme en une phrase, sans parler de l'outil.")
         }
         if (withSkills) {
-            sb.append("\n\nQuand ton interlocuteur te confie quelque chose de durable sur lui (goûts, proches, projets, habitudes, contraintes), ")
-                .append("retiens-le avec « memoire » sans en faire tout un plat. Sers-toi de ce que tu sais de lui pour personnaliser tes réponses, ")
-                .append("rebondis sur ce qu'il dit et pose parfois une question pour mieux le connaître, comme le ferait un proche attentionné.")
+            sb.append(" Ce qu'il te confie de durable sur lui, retiens-le avec « memoire » et sers-t'en pour personnaliser tes réponses.")
         }
         if (prefs.suggestions) {
             sb.append("\n\nTermine chaque réponse par une dernière ligne qui commence par >> suivie de 2 ou 3 relances très courtes ")
@@ -471,6 +467,9 @@ class LlmEngine(
         }
     }
 
+    /** Caractères de contexte (web, bibliothèque) qu'un message peut apporter sans déborder. */
+    fun contextBudget(messageChars: Int): Int = (roomAfterCompaction() - messageChars - 200).coerceAtLeast(600)
+
     private fun isContextFull(t: Throwable) = (t.message ?: "").let { it.contains("exceeds available state", true) || it.contains("Status Code: 9") }
 
     private fun friendly(t: Throwable): String = when {
@@ -535,7 +534,7 @@ class LlmEngine(
         /** Place gardée pour la réponse (≈ 350 jetons). */
         private const val ANSWER_RESERVE = 1300
         /** Estimation de la place prise par la description des outils dans le contexte. */
-        private const val SKILLS_PROMPT_CHARS = 4200
+        private const val SKILLS_PROMPT_CHARS = 2400
         /** Jetons audio par seconde (estimation prudente pour la gestion du contexte). */
         private const val AUDIO_TOKENS_PER_S = 12
 

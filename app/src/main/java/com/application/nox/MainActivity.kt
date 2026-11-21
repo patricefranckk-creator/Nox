@@ -736,7 +736,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                                 l.onError("Pas de résultat sur internet pour « $web ». Vérifie la connexion.")
                             } else {
                                 view.setSources(results.take(5).map { it.title + TurnView.SEP + it.url })
-                                engine.send(text, prior, l, null, WebSearch.contextBlock(web, results))
+                                engine.send(text, prior, l, null, WebSearch.contextBlock(web, results, engine.contextBudget(text.length)))
                             }
                             refreshAction()
                         }
