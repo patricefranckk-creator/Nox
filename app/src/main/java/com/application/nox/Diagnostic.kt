@@ -78,6 +78,8 @@ class Diagnostic(private val a: MainActivity) {
     private var dialog: NoxDialog? = null
 
     fun show() {
+        if (running) { a.toast("Un diagnostic est déjà en cours"); return }
+        running = true
         val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(4), a.dp(2), a.dp(4), 0) }
         body.addView(a.text("Nox se teste lui-même puis écrit un rapport complet dans Téléchargements/Nox. " +
             "Envoie-moi ce fichier : il contient tout ce qu'il faut pour perfectionner l'application.", 13.5f, Ui.MUTED))
@@ -128,6 +130,8 @@ class Diagnostic(private val a: MainActivity) {
             "Commandes internet" to ::webCommands,
             "Bibliothèque" to ::library,
             "RAG : retrouve ses propres fiches" to ::ragRecall,
+            "RAG : vraies questions" to ::ragQuestions,
+            "RAG : bruit hors sujet" to ::ragNoise,
             "Réseau & recherche web" to ::web,
             "Voix de Nox (synthèse)" to ::tts,
             "Écoute (reconnaissance vocale)" to ::stt,
@@ -139,7 +143,7 @@ class Diagnostic(private val a: MainActivity) {
             "Erreurs récentes" to ::errors,
         )
         steps.forEachIndexed { i, (name, fn) ->
-            if (cancelled) return
+            if (cancelled) { running = false; return }
             ui { progress.text = "Test ${i + 1}/${steps.size} · $name…" }
             val c = Check(name)
             val clock = NoxLog.chrono()
@@ -152,6 +156,7 @@ class Diagnostic(private val a: MainActivity) {
         }
         report = buildReport()
         save()
+        running = false
         ui {
             val ok = results.count { it.status == Status.OK }
             val warn = results.count { it.status == Status.WARN }
@@ -252,6 +257,12 @@ class Diagnostic(private val a: MainActivity) {
 
     private fun engine(c: Check) {
         val en = Nox.engine
+        var waited = 0
+        while (!en.ready && Nox.loading && waited < 300 && !cancelled) {
+            ui { progress.text = "Attente de la fin du chargement du modèle… ${waited} s" }
+            Thread.sleep(1000); waited++
+        }
+        if (waited > 0) c.line("Attente du chargement : $waited s")
         c.line("Prêt : ${oui(en.ready)} · occupé : ${oui(en.busy)} · chargement en cours : ${oui(Nox.loading)}")
         c.line("Modèle : ${en.modelLabel.ifBlank { "—" }} · moteur : ${en.backendLabel.ifBlank { "—" }}")
         c.line("Audio natif : ${oui(en.audioReady)} · vision : ${oui(en.visionReady)} · outils actifs : ${oui(en.skillsActive)}")
@@ -304,10 +315,7 @@ class Diagnostic(private val a: MainActivity) {
             }
             if (answer.contains("<think", true) || answer.contains("```tool", true)) c.warn("Balises internes visibles dans la réponse")
         }
-        val reset = CountDownLatch(1)
-        main.post { en.resetConversation(Nox.messages) { reset.countDown() } }
-        reset.await(60, TimeUnit.SECONDS)
-        c.line("Conversation remise dans son état (${Nox.messages.size} messages)")
+        c.line("Les deux questions de test restent dans le contexte du modèle (pas dans ton fil) : « Nouvelle conversation » repart de zéro.")
         val medTtft = ttfts.sorted().getOrNull(ttfts.size / 2) ?: -1
         if (medTtft > 6000) c.warn("Plus de 6 s avant le premier mot")
         val avgTps = if (tps.isEmpty()) 0.0 else tps.average()
@@ -423,9 +431,62 @@ class Diagnostic(private val a: MainActivity) {
         c.summary = "rang 1 : $top1/$n · top 3 : $top3/$n · ${times.average().toLong()} ms en moyenne"
     }
 
+    private fun ragQuestions(c: Check) {
+        val lib = Nox.library
+        val titles = lib.sources().map { Text.fold(it.title) }
+        val cases = listOf(
+            "C'est quoi un trou noir ?" to "trou noir", "Comment fonctionne la photosynthèse ?" to "photosynthese",
+            "Qu'est-ce que le Big Bang ?" to "big bang", "Que faire en cas d'hypothermie ?" to "hypothermie",
+            "Comment soigner une brûlure ?" to "brulure", "Comment mettre quelqu'un en position latérale de sécurité ?" to "position laterale",
+            "Qu'est-ce que la relativité générale ?" to "relativite generale", "Comment arrêter une hémorragie ?" to "hemorragie",
+            "Comment rendre l'eau potable ?" to "eau potable", "C'est quoi l'ADN ?" to "desoxyribonucleique",
+        ).filter { (_, key) -> titles.any { it.contains(key) } }
+        if (cases.isEmpty()) { c.status = Status.INFO; c.summary = "sauté (fiches de test absentes)"; return }
+        var found = 0; var injected = 0; var direct = 0
+        val goodCos = ArrayList<Double>()
+        for ((q, key) in cases) {
+            val all = lib.search(q, k = 5)
+            val strict = lib.search(q, k = 3, strict = true)
+            val rank = all.indexOfFirst { Text.fold(it.chunk.title).contains(key) }
+            if (rank in 0..2) found++
+            val strictOk = strict.firstOrNull()?.let { Text.fold(it.chunk.title).contains(key) } == true
+            if (strictOk) injected++
+            val d = Router.isKnowledgeQuestion(q) && strict.firstOrNull()?.let { Router.confident(it) && Text.fold(it.chunk.title).contains(key) } == true
+            if (d) direct++
+            all.getOrNull(rank)?.let { goodCos += it.cos }
+            c.line("${if (rank in 0..2) "✓" else "✗"} « $q » → rang ${if (rank < 0) "absent" else rank + 1} · injecté ${oui(strictOk)} · direct ${oui(d)}" +
+                all.take(3).joinToString("") { "\n     · ${it.chunk.title.take(45)} cos ${"%.3f".format(Locale.ROOT, it.cos)} bm25 ${"%.1f".format(Locale.ROOT, it.bm25)}" })
+        }
+        val n = cases.size
+        if (goodCos.isNotEmpty()) c.line("Cosinus des bonnes fiches : min ${"%.3f".format(Locale.ROOT, goodCos.min())} · moyenne ${"%.3f".format(Locale.ROOT, goodCos.average())}")
+        c.line("Seuils : injection cos ≥ ${Library.COS_STRONG} · réponse directe cos ≥ ${Router.COS_DIRECT}")
+        if (found * 100 / n < 70) c.warn("Les bonnes fiches ne remontent pas assez souvent ($found/$n)")
+        if (injected * 100 / n < 50) c.warn("Seuil d'injection trop haut : $injected/$n bonnes fiches injectées")
+        c.summary = "trouvées $found/$n · injectées $injected/$n · réponses directes $direct/$n"
+    }
+
+    private fun ragNoise(c: Check) {
+        val lib = Nox.library
+        val queries = listOf("recette de la pâte à crêpes", "résultats du match de rugby", "histoire de France", "la ville de Pau",
+            "l'autisme chez l'enfant", "programmer en Kotlin", "le prix de l'essence", "les impôts sur le revenu")
+        var leaks = 0
+        val noise = ArrayList<Double>()
+        for (q in queries) {
+            val all = lib.search(q, k = 3)
+            val strict = lib.search(q, k = 3, strict = true)
+            all.firstOrNull()?.let { noise += it.cos }
+            if (strict.isNotEmpty()) leaks++
+            c.line("${if (strict.isEmpty()) "✓" else "✗"} « $q » → injecté : ${strict.joinToString { it.chunk.title.take(35) }.ifBlank { "rien" }}" +
+                (all.firstOrNull()?.let { " · meilleur cos ${"%.3f".format(Locale.ROOT, it.cos)} (${it.chunk.title.take(35)})" } ?: ""))
+        }
+        if (noise.isNotEmpty()) c.line("Plancher de bruit : cos max ${"%.3f".format(Locale.ROOT, noise.max())} · moyen ${"%.3f".format(Locale.ROOT, noise.average())}")
+        if (leaks > 0) c.warn("$leaks question(s) hors sujet reçoivent quand même des extraits")
+        c.summary = "${queries.size - leaks}/${queries.size} sans extrait parasite"
+    }
+
     private fun web(c: Check) {
         val cm = a.getSystemService(ConnectivityManager::class.java)
-        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        val caps = try { cm.getNetworkCapabilities(cm.activeNetwork) } catch (t: SecurityException) { c.warn("État du réseau illisible : ${t.message}"); null }
         val online = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         val kind = when {
             caps == null -> "aucun"
@@ -434,7 +495,7 @@ class Diagnostic(private val a: MainActivity) {
             else -> "autre"
         }
         c.line("Réseau : $kind · internet validé ${oui(online)} · débit annoncé ${caps?.linkDownstreamBandwidthKbps ?: 0} kb/s")
-        if (!online) { c.status = Status.WARN; c.line("⚠ Pas d'internet : test de recherche sauté"); c.summary = "hors ligne"; return }
+        if (caps != null && !online) { c.status = Status.WARN; c.line("⚠ Pas d'internet : test de recherche sauté"); c.summary = "hors ligne"; return }
         val clock = NoxLog.chrono()
         val res = WebSearch.search("Pau Pyrénées-Atlantiques", pages = 1)
         val ms = clock.ms()
@@ -564,7 +625,7 @@ class Diagnostic(private val a: MainActivity) {
             c.line("${fmt.format(Date(e.timestamp))} · $why · PSS ${NoxLog.gb(e.pss * 1024L)} · RSS ${NoxLog.gb(e.rss * 1024L)}${e.description?.let { " · $it" } ?: ""}")
             if (e.reason == android.app.ApplicationExitInfo.REASON_CRASH_NATIVE || e.reason == android.app.ApplicationExitInfo.REASON_ANR) {
                 try {
-                    e.traceInputStream?.use { s -> c.line("    trace : " + s.readBytes().decodeToString().lines().take(40).joinToString("\n    ")) }
+                    e.traceInputStream?.use { s -> c.line("    trace :\n    " + readableTrace(s.readBytes()).joinToString("\n    ")) }
                 } catch (_: Throwable) {}
             }
         }
@@ -646,7 +707,22 @@ class Diagnostic(private val a: MainActivity) {
 
     // ================================================================== outils
 
+    companion object { @Volatile private var running = false }
+
     private fun oui(b: Boolean) = if (b) "oui" else "non"
+
+    /** Tombstone natif (protobuf) ou trace ANR (texte) : on garde les chaînes lisibles utiles. */
+    private fun readableTrace(bytes: ByteArray): List<String> {
+        val runs = ArrayList<String>()
+        val cur = StringBuilder()
+        for (b in bytes) {
+            val ch = b.toInt() and 0xFF
+            if (ch in 32..126) cur.append(ch.toChar()) else { if (cur.length >= 6) runs += cur.toString(); cur.setLength(0) }
+        }
+        if (cur.length >= 6) runs += cur.toString()
+        val useful = Regex("SIG[A-Z]+|SEGV|abort|Abort|\\.so|::|Exception|Error|assert|Check failed|null pointer|signal|Cause|thread|\"main\"|at ")
+        return runs.filter { useful.containsMatchIn(it) }.distinct().take(60).map { it.take(220) }
+    }
 
     private fun installed(pkg: String) = try { a.packageManager.getPackageInfo(pkg, 0); true } catch (_: Exception) { false }
 

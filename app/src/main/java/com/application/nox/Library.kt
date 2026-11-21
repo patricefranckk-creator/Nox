@@ -386,7 +386,11 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             val c = byId[e.key] ?: return@mapNotNull null
             val b = bm[e.key] ?: 0.0
             val s = cos[e.key] ?: 0.0
-            val relevant = if (strict) (s >= COS_STRONG || b >= BM25_STRONG) else (s >= COS_WEAK || b > 0.0)
+            val relevant = when {
+                qv == null -> if (strict) b >= BM25_STRONG else b > 0.0
+                strict -> s >= COS_STRONG || (b >= BM25_STRONG && s >= COS_MID)
+                else -> s >= COS_WEAK || (b > 0.0 && s >= COS_WEAK - 0.04)
+            }
             if (!relevant) null else Hit(c, e.value, if (s > 0) String.format(Locale.ROOT, "sens %.2f", s) else "mots-clés", s, b)
         }.take(k)
     }
@@ -529,8 +533,10 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
     companion object {
         /** Seuils d'injection automatique (prudents : mieux vaut rien qu'un hors-sujet). */
-        const val COS_STRONG = 0.55
-        const val COS_WEAK = 0.35
+        // EmbeddingGemma 2 : un texte sans rapport obtient déjà ≈ 0,67–0,72 (mesuré par le diagnostic)
+        const val COS_STRONG = 0.76
+        const val COS_MID = 0.73
+        const val COS_WEAK = 0.70
         /** Voix ↔ texte : les scores croisés sont plus bas que texte ↔ texte. */
         const val COS_AUDIO = 0.30
         const val BM25_STRONG = 4.0

@@ -11,8 +11,9 @@ package com.application.nox
 object Router {
 
     /** Seuils plus exigeants que l'injection automatique : on répond sans le modèle seulement si c'est net. */
-    private const val COS_DIRECT = 0.62
-    private const val BM25_DIRECT = 6.5
+    const val COS_DIRECT = 0.82
+    private const val BM25_DIRECT = 8.0
+    private const val COS_WITH_BM25 = 0.76
 
     private val DETAILS = Regex("^(?:et )?(?:(?:donne|dis)[- ]moi )?(?:plus de details?|plus d'infos?|plus d'informations|developpe|detaille|approfondis|precise|" +
         "explique (?:mieux|davantage|plus|en detail)|dis[- ]m'en plus|en savoir plus|vas[- ]y developpe|continue|resume|fais[- ]moi un resume|et apres|la suite)\\b")
@@ -39,7 +40,8 @@ object Router {
 
     /** Passage assez sûr pour répondre sans le modèle (bibliothèque, pas les conversations passées). */
     fun confident(h: Library.Hit): Boolean =
-        !h.chunk.source.startsWith("chat:") && (h.cos >= COS_DIRECT || h.bm25 >= BM25_DIRECT)
+        !h.chunk.source.startsWith("chat:") &&
+            ((h.cos >= COS_DIRECT && h.bm25 > 0.0) || (h.bm25 >= BM25_DIRECT && (h.cos == 0.0 || h.cos >= COS_WITH_BM25)))
 
     /**
      * La réponse rapide : le texte même du meilleur passage (le titre de section en tête retiré),
