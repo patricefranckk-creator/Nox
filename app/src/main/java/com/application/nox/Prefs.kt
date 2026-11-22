@@ -55,9 +55,16 @@ class Prefs(ctx: Context) {
         get() = sp.getFloat("pitch", 0.95f)
         set(v) = sp.edit().putFloat("pitch", v).apply()
 
-    /** "native" = l'audio va directement dans Gemma (modèles E) · "android" = reconnaissance vocale du téléphone. */
+    /**
+     * "android" (par défaut) = reconnaissance vocale du téléphone : la phrase devient du texte, donc commandes
+     * directes, heure, recherche web et bibliothèque marchent à l'oral · "native" = le son brut va dans Gemma.
+     * Passage unique en "android" pour les installations qui étaient en "native" (étape « voix + raccourcis »).
+     */
     var listenMode: String
-        get() = sp.getString("listen_mode", "native") ?: "native"
+        get() {
+            if (!sp.getBoolean("listen_v2", false)) sp.edit().putString("listen_mode", "android").putBoolean("listen_v2", true).commit()
+            return sp.getString("listen_mode", "android") ?: "android"
+        }
         set(v) = sp.edit().putString("listen_mode", v).apply()
 
     /** Outils locaux (minuteur, notes, mémoire…) proposés au modèle. */

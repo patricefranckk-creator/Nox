@@ -69,8 +69,8 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(a.sectionTitle("Voix"))
         body.addView(label("Comment Nox t'écoute"))
         val listen = radios(listOf(
-            "native" to "Oreille Gemma : le son va directement dans le modèle (comprend le ton, 100 % local)",
-            "android" to "Reconnaissance du téléphone : texte en direct pendant que tu parles",
+            "android" to "Reconnaissance du téléphone (recommandé) : commandes directes, heure, recherche web et bibliothèque à l'oral, plus rapide, moins de RAM",
+            "native" to "Oreille Gemma : le son va directement dans le modèle (comprend le ton), mais sans ces raccourcis",
         ), p.listenMode)
         body.addView(listen)
         body.addView(a.text("L'oreille Gemma ne marche qu'avec Gemma 4 / 3n (E2B, E4B). Sinon Nox bascule tout seul sur la reconnaissance du téléphone.",
@@ -167,7 +167,7 @@ class SettingsDialog(private val a: MainActivity) {
             p.turbo = turbo.isChecked
             p.vision = vision.isChecked
             p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
-            p.listenMode = checkedTag(listen) ?: "native"
+            p.listenMode = checkedTag(listen) ?: "android"
             p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
             p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
             p.background = bg.isChecked
