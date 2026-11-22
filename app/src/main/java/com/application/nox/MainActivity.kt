@@ -717,8 +717,20 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l); refreshAction() } }
             try {
                 val clock = Router.timeAnswer(text)
-                val web = if (clock == null && prefs.webSearch) WebSearch.queryOf(text) else null
+                val cmd = if (clock == null && prefs.skillsEnabled) Commands.match(text) else null
+                val done = cmd?.let { c ->
+                    val t = NoxLog.chrono()
+                    try { Nox.skills.all.first { it.name == c.skill }.run(c.args).also { NoxLog.p("ROUTE", "Commande directe ${c.skill} ${c.args} en ${t.ms()} ms") } }
+                    catch (e: Throwable) { NoxLog.w("ROUTE", "Commande directe ${c.skill} impossible, le modèle prend la main : ${e.message}"); null }
+                }
+                val web = if (clock == null && done == null && prefs.webSearch) WebSearch.queryOf(text) else null
                 when {
+                    done != null -> main.post {
+                        routing = false
+                        lastLibrary = null
+                        l.onChunk(done)
+                        l.onDone("commande directe")
+                    }
                     clock != null -> main.post {
                         routing = false
                         lastLibrary = null

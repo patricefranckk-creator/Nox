@@ -22,6 +22,12 @@ jobs:
       - name: SDK Android 36
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
+      - name: Tests des commandes directes
+        run: |
+          curl -sSLo json.jar https://repo1.maven.org/maven2/org/json/json/20240303/json-20240303.jar
+          kotlinc -cp json.jar ci/commandes/*.kt app/src/main/java/com/application/nox/Commands.kt app/src/main/java/com/application/nox/MathEval.kt -include-runtime -d commandes.jar 2>&1 | grep -v "^warning" || true
+          java -cp commandes.jar:json.jar com.application.nox.TestCommandesKt
+
       - uses: gradle/actions/setup-gradle@v6
 
       - name: Compilation

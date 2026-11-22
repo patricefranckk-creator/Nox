@@ -365,6 +365,14 @@ class Diagnostic(private val a: MainActivity) {
             if (got == want) ok++ else c.warn("« $m » : horloge = $got (attendu $want)")
             c.line("${if (got == want) "✓" else "✗"} horloge « $m » → $got")
         }
+        val cmds = listOf("Mets un minuteur de 5 minutes" to "horloge", "Rappelle-moi dans 20 minutes de sortir le linge" to "rappel",
+            "Allume la lampe" to "telephone", "Ajoute du lait à la liste de courses" to "notes", "Ouvre WhatsApp" to "ouvrir",
+            "Ouvre WhatsApp et écris à Paul" to null, "Quelle est la capitale de la France ?" to null)
+        for ((m, want) in cmds) {
+            n++; val got = Commands.match(m)?.skill
+            if (got == want) ok++ else c.warn("« $m » : commande directe = $got (attendu $want)")
+            c.line("${if (got == want) "✓" else "✗"} commande « $m » → ${got ?: "modèle"}")
+        }
         c.line("Observation : « Tu peux me dire c'est quoi un trou noir ? » → ${Router.isKnowledgeQuestion("Tu peux me dire c'est quoi un trou noir ?")}")
         c.line("Observation : « C'est quoi l'autisme ? » → ${Router.isKnowledgeQuestion("C'est quoi l'autisme ?")}")
         c.line("Réglages : bibliothèque d'abord ${oui(Nox.prefs.ragFirst)} · recherche web ${oui(Nox.prefs.webSearch)} · RAG auto ${oui(Nox.prefs.ragAuto)}")
