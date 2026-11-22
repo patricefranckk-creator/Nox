@@ -126,7 +126,7 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
         val ready = Cloud.Api.values().filter { keys.has(it.id) }
         list.addView(a.text(if (ready.isEmpty())
             "Ici, tes questions partent vers tes API en ligne. Touche « API » pour ajouter tes clés (Groq, Gemini, OpenRouter, NVIDIA, GNews, Unsplash)."
-        else "Pose ta question : Nox choisit tout seul le bon service. Actualités → GNews · « montre-moi une photo de… » → Unsplash · le reste → Groq, ou Gemini pour les demandes longues.",
+        else "Pose ta question : Nox choisit tout seul le bon service. Actualités → GNews · « montre-moi une photo de… » → Unsplash · « crée une image de… » → NVIDIA · le reste → Groq, ou Gemini pour les demandes longues.",
             14f, Ui.FAINT).apply { setPadding(0, a.dp(12), 0, a.dp(8)) })
         refreshStatus()
     }
@@ -177,10 +177,11 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
                     foot.text = "via ${ans.via} · ${String.format(Locale.FRANCE, "%.1f", ans.ms / 1000.0)} s"
                     if (ans.sources.isNotEmpty()) box.addView(sources(ans.sources))
                     if (ans.photos.isNotEmpty()) box.addView(photos(ans.photos))
+                    ans.created.forEach { box.addView(created(it)) }
                     history += Cloud.Msg("user", q)
                     history += Cloud.Msg("assistant", ans.text)
                     while (history.size > 24) history.removeAt(0)
-                    if (a.prefs.autoSpeak && ans.photos.isEmpty()) a.voiceOut.speakAll(ans.text)
+                    if (a.prefs.autoSpeak && ans.photos.isEmpty() && ans.created.isEmpty()) a.voiceOut.speakAll(ans.text)
                 }.onFailure { t ->
                     body.text = "⚠ " + (t.message ?: "erreur")
                     body.setTextColor(Ui.DANGER)
@@ -246,6 +247,38 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
         return HorizontalScrollView(a).apply { isHorizontalScrollBarEnabled = false; addView(row) }
     }
 
+    /** Image créée par NVIDIA : affichée en grand, toucher = enregistrer dans la galerie (Images/Nox). */
+    private fun created(bytes: ByteArray): View {
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val w = a.resources.displayMetrics.widthPixels - a.dp(36)
+        return ImageView(a).apply {
+            setImageBitmap(bmp)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            background = Ui.rounded(Ui.SURFACE, a.dp(16).toFloat())
+            clipToOutline = true
+            contentDescription = "Image créée · touche pour l'enregistrer"
+            layoutParams = LinearLayout.LayoutParams(w, -2).apply { topMargin = a.dp(10) }
+            setOnClickListener { save(bytes) }
+        }
+    }
+
+    private fun save(bytes: ByteArray) {
+        try {
+            val name = "nox_image_${System.currentTimeMillis()}.jpg"
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/Nox")
+            }
+            val uri = a.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: error("refusé")
+            a.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            a.toast("Image enregistrée dans Images/Nox")
+        } catch (t: Throwable) {
+            a.toast("Enregistrement impossible : ${t.message}")
+        }
+    }
+
     private fun load(url: String): Bitmap? = try {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 10_000; c.readTimeout = 15_000
@@ -308,9 +341,9 @@ class CloudApisDialog(private val a: MainActivity, private val keys: CloudKeys, 
         }
         box.addView(key)
         var model: EditText? = null
-        if (api.llm) {
+        if (api.llm || api == Cloud.Api.NVIDIA) {
             val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, a.dp(8), 0, 0) }
-            model = field("modèle : auto").apply { setText(keys.model(api.id)); textSize = 13.5f }
+            model = field(if (api == Cloud.Api.NVIDIA) "modèle d'image : auto (FLUX.1-dev)" else "modèle : auto").apply { setText(keys.model(api.id)); textSize = 13.5f }
             row.addView(model, LinearLayout.LayoutParams(0, -2, 1f))
             val m = model
             row.addView(a.pillButton("Modèles", filled = false) { pickModel(api, key, m) },
@@ -353,6 +386,13 @@ class CloudApisDialog(private val a: MainActivity, private val keys: CloudKeys, 
 
     private fun pickModel(api: Cloud.Api, key: EditText, target: EditText) {
         save(api, key to null)
+        if (api == Cloud.Api.NVIDIA) {
+            val items = (listOf("auto (FLUX.1-dev)") + Cloud.IMAGE_MODELS).toTypedArray<CharSequence>()
+            NoxDialog.sheet(a).setTitle("Modèle d'image NVIDIA")
+                .setItems(items) { _, i -> target.setText(if (i == 0) "" else Cloud.IMAGE_MODELS[i - 1]) }
+                .setNegativeButton("Annuler", null).show()
+            return
+        }
         if (!keys.has(api.id)) { a.toast("Ajoute d'abord la clé"); return }
         a.toast("Liste des modèles…")
         Thread {

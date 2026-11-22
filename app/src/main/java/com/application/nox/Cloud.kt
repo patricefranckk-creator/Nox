@@ -12,7 +12,8 @@ import java.net.URLEncoder
  *  · actualités → GNews (titres récents) puis résumé par un modèle de langage ;
  *  · « montre-moi une photo de… » → Unsplash (images dans le chat, crédit du photographe) ;
  *  · questions → Groq d'abord (le plus rapide), Gemini Flash pour les demandes longues ou complexes,
- *    puis OpenRouter et NVIDIA en secours si un service échoue.
+ *    puis OpenRouter en secours si un service échoue ;
+ *  · « crée / dessine / génère une image de… » → NVIDIA (FLUX), uniquement pour la création d'images.
  * Tout passe par des requêtes HTTPS directes ; les clés restent chiffrées sur le téléphone.
  */
 object Cloud {
@@ -21,14 +22,15 @@ object Cloud {
         GROQ("groq", "Groq", true, "console.groq.com/keys", "Très rapide · questions courantes"),
         GEMINI("gemini", "Gemini Flash", true, "aistudio.google.com/apikey", "Demandes longues ou complexes"),
         OPENROUTER("openrouter", "OpenRouter", true, "openrouter.ai/keys", "Secours · des centaines de modèles"),
-        NVIDIA("nvidia", "NVIDIA", true, "build.nvidia.com", "Secours · modèles NVIDIA NIM"),
+        NVIDIA("nvidia", "NVIDIA", false, "build.nvidia.com", "Création d'images uniquement (FLUX)"),
         GNEWS("gnews", "GNews", false, "gnews.io", "Actualités récentes"),
         UNSPLASH("unsplash", "Unsplash", false, "unsplash.com/developers", "Photos (clé « Access Key »)"),
     }
 
     data class Msg(val role: String, val text: String)
     data class Photo(val url: String, val author: String, val link: String, val description: String)
-    data class Answer(val text: String, val via: String, val ms: Long, val sources: List<String> = emptyList(), val photos: List<Photo> = emptyList())
+    data class Answer(val text: String, val via: String, val ms: Long, val sources: List<String> = emptyList(),
+                      val photos: List<Photo> = emptyList(), val created: List<ByteArray> = emptyList())
 
     class CloudException(msg: String) : Exception(msg)
 
@@ -36,18 +38,20 @@ object Cloud {
 
     private val NEWS = Regex("\\b(?:actu|actus|actualites?|infos?|nouvelles|news|journal|quoi de neuf|derniere heure|a la une|gros titres)\\b")
     private val PHOTO = Regex("^(?:(?:montre|affiche|trouve|cherche)(?:[- ]moi)?|je veux voir)\\s+(?:une |des |la |les )?(?:photos?|images?|illustrations?)\\s+(?:de |d'|du |des |sur )?(.+)$")
+    private val CREATE = Regex("^(?:(?:cree|creer|genere|generer|dessine|dessiner|fais|faire|imagine|realise|produis|peins)(?:[- ]moi)?|je veux)\\s+(?:une |un |des |l'|la |le )?(?:image|images|illustration|dessin|photo|logo|affiche|peinture|tableau|portrait|visuel|fond d'ecran)s?\\b\\s*(?:de |d'|du |des |avec |representant |qui represente |montrant |sur )?(.*)$")
     private val COMPLEX = Regex("\\b(?:explique en detail|en detail|analyse|compare|redige|ecris(?:-moi)? (?:un|une)|code|programme|plan|strategie|pourquoi exactement|resume ce|traduis)\\b")
 
     /** Choisit et appelle le bon service ; essaie le suivant si l'un échoue. */
     fun ask(text: String, history: List<Msg>, keys: CloudKeys, userName: String): Answer {
         val f = Text.fold(text.trim()).trimEnd('?', '!', '.', ' ')
+        CREATE.find(f)?.let { m -> if (keys.has(Api.NVIDIA.id)) return create(text, m.groupValues[1], history, keys) }
         PHOTO.find(f)?.let { m -> if (keys.has(Api.UNSPLASH.id)) return photos(m.groupValues[1], keys) }
         if (NEWS.containsMatchIn(f) && keys.has(Api.GNEWS.id)) return news(text, f, history, keys, userName)
         return llm(text, history, keys, userName, complex = text.length > 220 || COMPLEX.containsMatchIn(f))
     }
 
     private fun llmOrder(keys: CloudKeys, complex: Boolean): List<Api> {
-        val order = if (complex) listOf(Api.GEMINI, Api.GROQ, Api.OPENROUTER, Api.NVIDIA) else listOf(Api.GROQ, Api.GEMINI, Api.OPENROUTER, Api.NVIDIA)
+        val order = if (complex) listOf(Api.GEMINI, Api.GROQ, Api.OPENROUTER) else listOf(Api.GROQ, Api.GEMINI, Api.OPENROUTER)
         return order.filter { keys.has(it.id) }
     }
 
@@ -58,7 +62,7 @@ object Cloud {
 
     fun llm(text: String, history: List<Msg>, keys: CloudKeys, userName: String, complex: Boolean = false, context: String? = null): Answer {
         val order = llmOrder(keys, complex)
-        if (order.isEmpty()) throw CloudException("Aucune clé d'IA en ligne : ajoute Groq, Gemini, OpenRouter ou NVIDIA dans la page API.")
+        if (order.isEmpty()) throw CloudException("Aucune clé d'IA en ligne : ajoute Groq, Gemini ou OpenRouter dans la page API.")
         val errors = ArrayList<String>()
         for (api in order) {
             val t0 = System.currentTimeMillis()
@@ -85,7 +89,6 @@ object Cloud {
         Api.GROQ -> "https://api.groq.com/openai/v1"
         Api.GEMINI -> "https://generativelanguage.googleapis.com/v1beta/openai"
         Api.OPENROUTER -> "https://openrouter.ai/api/v1"
-        Api.NVIDIA -> "https://integrate.api.nvidia.com/v1"
         else -> error("pas un modèle de langage")
     }
 
@@ -121,12 +124,12 @@ object Cloud {
         keys.model(api.id).takeIf { it.isNotBlank() }?.let { return it }
         val pick = when (api) {
             Api.OPENROUTER -> "openrouter/auto"
+            Api.NVIDIA -> IMAGE_MODELS.first()
             else -> {
                 val list = models(api, keys.key(api.id))
                 val prefs = when (api) {
                     Api.GROQ -> listOf("llama-3.3-70b", "gpt-oss-120b", "llama-4", "qwen3", "70b")
-                    Api.GEMINI -> listOf("flash")
-                    else -> listOf("llama-3.3-70b", "nemotron", "llama-4", "70b", "instruct")
+                    else -> listOf("flash")
                 }
                 prefs.firstNotNullOfOrNull { p ->
                     list.filter { it.contains(p, true) && !it.contains("lite", true) && !it.contains("preview", true) }.maxOrNull()
@@ -137,6 +140,52 @@ object Cloud {
         keys.setModel(api.id, pick)
         NoxLog.i("CLOUD", "${api.title} : modèle choisi automatiquement $pick")
         return pick
+    }
+
+    // ---------------------------------------------------------------- NVIDIA : création d'images
+
+    /** Modèles d'image NVIDIA (adresse ai.api.nvidia.com/v1/genai/<modèle>). */
+    val IMAGE_MODELS = listOf("black-forest-labs/flux.1-dev", "black-forest-labs/flux.1-schnell", "black-forest-labs/flux-3-image-klein",
+        "stabilityai/stable-diffusion-3-medium")
+
+    private fun create(original: String, subject: String, history: List<Msg>, keys: CloudKeys): Answer {
+        val t0 = System.currentTimeMillis()
+        // FLUX comprend mieux l'anglais : on fait traduire et enrichir la demande si un modèle de langage est là
+        val prompt = try {
+            llm("Transforme cette demande en un prompt anglais détaillé pour un générateur d'images (sujet, style, lumière, cadrage). " +
+                "Réponds uniquement par le prompt, sans guillemets.\nDemande : $original", emptyList(), keys, "").text
+                .lines().first { it.isNotBlank() }.trim().trim('"').take(900)
+        } catch (_: Throwable) { subject.ifBlank { original } }
+        val img = try { image(prompt, keys) } catch (t: Throwable) {
+            keys.record(Api.NVIDIA.id, 0, t.message); throw CloudException("NVIDIA : ${t.message}")
+        }
+        val ms = System.currentTimeMillis() - t0
+        keys.record(Api.NVIDIA.id, ms, null)
+        NoxLog.p("CLOUD", "Image NVIDIA ${modelFor(Api.NVIDIA, keys)} en $ms ms · « ${prompt.take(80)} »")
+        return Answer("Voici ton image. Touche-la pour l'enregistrer dans ta galerie.", "NVIDIA · ${modelFor(Api.NVIDIA, keys).substringAfterLast('/')}", ms,
+            created = listOf(img))
+    }
+
+    private fun image(prompt: String, keys: CloudKeys): ByteArray {
+        val model = modelFor(Api.NVIDIA, keys)
+        val url = "https://ai.api.nvidia.com/v1/genai/$model"
+        val auth = mapOf("Authorization" to "Bearer ${keys.key(Api.NVIDIA.id)}")
+        val full = JSONObject().put("prompt", prompt).put("seed", 0)
+        when {
+            model.contains("flux.1-dev") -> full.put("mode", "base").put("cfg_scale", 3.5).put("width", 1024).put("height", 1024).put("steps", 30)
+            model.contains("schnell") -> full.put("width", 1024).put("height", 1024).put("steps", 4)
+        }
+        val raw = try { http(url, auth, full.toString(), 120_000) } catch (e: CloudException) {
+            // Chaque modèle a son propre format : en cas de refus du corps, on retente avec le strict minimum
+            if (e.message?.startsWith("HTTP 4") == true) http(url, auth, JSONObject().put("prompt", prompt).toString(), 120_000) else throw e
+        }
+        val art = JSONObject(raw).optJSONArray("artifacts")?.optJSONObject(0) ?: throw CloudException("pas d'image dans la réponse")
+        when (art.optString("finishReason")) {
+            "CONTENT_FILTERED" -> throw CloudException("image refusée par le filtre de contenu")
+            "ERROR" -> throw CloudException("le générateur a échoué")
+        }
+        val b64 = art.optString("base64").ifBlank { throw CloudException("image vide") }
+        return android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
     }
 
     // ---------------------------------------------------------------- GNews
@@ -202,6 +251,10 @@ object Cloud {
                 val n = JSONObject(http("https://gnews.io/api/v4/top-headlines?lang=fr&country=fr&max=1&apikey=${URLEncoder.encode(key, "UTF-8")}", emptyMap(), null, 15_000))
                     .optInt("totalArticles", 0)
                 "OK · $n articles disponibles"
+            }
+            Api.NVIDIA -> {
+                val img = image("a small red apple on a wooden table, soft daylight", keys)
+                "OK · image de ${img.size / 1024} Ko générée avec ${modelFor(Api.NVIDIA, keys).substringAfterLast('/')}"
             }
             Api.UNSPLASH -> {
                 http("https://api.unsplash.com/photos/random?count=1", mapOf("Authorization" to "Client-ID $key", "Accept-Version" to "v1"), null, 15_000)
