@@ -34,6 +34,19 @@ object Cloud {
 
     class CloudException(msg: String) : Exception(msg)
 
+    /** Étape en cours, affichée sous la question (« NVIDIA dessine l'image… »). */
+    @Volatile var onStage: ((String) -> Unit)? = null
+    @Volatile private var cancelled = false
+    @Volatile private var current: HttpURLConnection? = null
+
+    /** Arrête la demande en cours (bouton ■) : la connexion est coupée tout de suite. */
+    fun cancel() {
+        cancelled = true
+        try { current?.disconnect() } catch (_: Throwable) {}
+    }
+
+    private fun stage(s: String) { onStage?.invoke(s) }
+
     // ---------------------------------------------------------------- aiguillage
 
     private val NEWS = Regex("\\b(?:actu|actus|actualites?|infos?|nouvelles|news|journal|quoi de neuf|derniere heure|a la une|gros titres)\\b")
@@ -43,6 +56,7 @@ object Cloud {
 
     /** Choisit et appelle le bon service ; essaie le suivant si l'un échoue. */
     fun ask(text: String, history: List<Msg>, keys: CloudKeys, userName: String): Answer {
+        cancelled = false
         val f = Text.fold(text.trim()).trimEnd('?', '!', '.', ' ')
         CREATE.find(f)?.let { m -> if (keys.has(Api.NVIDIA.id)) return create(text, m.groupValues[1], history, keys) }
         PHOTO.find(f)?.let { m -> if (keys.has(Api.UNSPLASH.id)) return photos(m.groupValues[1], keys) }
@@ -65,7 +79,9 @@ object Cloud {
         if (order.isEmpty()) throw CloudException("Aucune clé d'IA en ligne : ajoute Groq, Gemini ou OpenRouter dans la page API.")
         val errors = ArrayList<String>()
         for (api in order) {
+            if (cancelled) throw CloudException("arrêté")
             val t0 = System.currentTimeMillis()
+            stage("${api.title} réfléchit")
             try {
                 val model = modelFor(api, keys)
                 val out = chat(api, model, keys.key(api.id), system(userName), history.takeLast(12), if (context == null) text else "$context\n\nQuestion : $text")
@@ -74,6 +90,7 @@ object Cloud {
                 NoxLog.p("CLOUD", "${api.title} · $model · ${out.length} car. en $ms ms")
                 return Answer(out.trim(), "${api.title} · ${model.substringAfterLast('/')}", ms)
             } catch (t: Throwable) {
+                if (cancelled) throw CloudException("arrêté")
                 val msg = t.message ?: t.javaClass.simpleName
                 keys.record(api.id, 0, msg)
                 errors += "${api.title} : $msg"
@@ -151,11 +168,14 @@ object Cloud {
     private fun create(original: String, subject: String, history: List<Msg>, keys: CloudKeys): Answer {
         val t0 = System.currentTimeMillis()
         // FLUX comprend mieux l'anglais : on fait traduire et enrichir la demande si un modèle de langage est là
+        stage("Je prépare la description de l'image")
         val prompt = try {
             llm("Transforme cette demande en un prompt anglais détaillé pour un générateur d'images (sujet, style, lumière, cadrage). " +
                 "Réponds uniquement par le prompt, sans guillemets.\nDemande : $original", emptyList(), keys, "").text
                 .lines().first { it.isNotBlank() }.trim().trim('"').take(900)
         } catch (_: Throwable) { subject.ifBlank { original } }
+        if (cancelled) throw CloudException("arrêté")
+        stage("NVIDIA dessine l'image (souvent 10 à 40 s)")
         val img = try { image(prompt, keys) } catch (t: Throwable) {
             keys.record(Api.NVIDIA.id, 0, t.message); throw CloudException("NVIDIA : ${t.message}")
         }
@@ -175,9 +195,11 @@ object Cloud {
             model.contains("flux.1-dev") -> full.put("mode", "base").put("cfg_scale", 3.5).put("width", 1024).put("height", 1024).put("steps", 30)
             model.contains("schnell") -> full.put("width", 1024).put("height", 1024).put("steps", 4)
         }
-        val raw = try { http(url, auth, full.toString(), 120_000) } catch (e: CloudException) {
+        val raw = try { http(url, auth, full.toString(), 90_000) } catch (e: CloudException) {
             // Chaque modèle a son propre format : en cas de refus du corps, on retente avec le strict minimum
-            if (e.message?.startsWith("HTTP 4") == true) http(url, auth, JSONObject().put("prompt", prompt).toString(), 120_000) else throw e
+            if (e.message?.startsWith("HTTP 4") == true && !cancelled) http(url, auth, JSONObject().put("prompt", prompt).toString(), 90_000) else throw e
+        } catch (e: java.net.SocketTimeoutException) {
+            throw CloudException("NVIDIA n'a pas répondu en 90 s, réessaie ou choisis FLUX.1-schnell (plus rapide)")
         }
         val art = JSONObject(raw).optJSONArray("artifacts")?.optJSONObject(0) ?: throw CloudException("pas d'image dans la réponse")
         when (art.optString("finishReason")) {
@@ -194,6 +216,7 @@ object Cloud {
 
     private fun news(original: String, f: String, history: List<Msg>, keys: CloudKeys, userName: String): Answer {
         val t0 = System.currentTimeMillis()
+        stage("Je cherche les actualités")
         val topic = NEWS_WORDS.replace(f, " ").replace(Regex("[^a-z0-9' -]"), " ").replace(Regex("\\s+"), " ").trim()
         val key = URLEncoder.encode(keys.key(Api.GNEWS.id), "UTF-8")
         val url = if (topic.length >= 3) "https://gnews.io/api/v4/search?q=${URLEncoder.encode(topic, "UTF-8")}&lang=fr&max=6&sortby=publishedAt&apikey=$key"
@@ -210,6 +233,7 @@ object Cloud {
             "- ${a.optString("title")} (${a.optJSONObject("source")?.optString("name")}, ${a.optString("publishedAt").take(10)}) : ${a.optString("description")}"
         }
         val sources = list.map { it.optString("title") + TurnView.SEP + it.optString("url") }
+        stage("Je résume ${list.size} articles")
         return try {
             val a = llm(original, history, keys, userName, context = "Voici des actualités récentes (GNews) :\n$block\n\nRésume-les clairement pour répondre, sans inventer, en citant le média entre parenthèses.")
             a.copy(via = "GNews + ${a.via}", ms = System.currentTimeMillis() - t0, sources = sources)
@@ -222,6 +246,7 @@ object Cloud {
 
     private fun photos(subject: String, keys: CloudKeys): Answer {
         val t0 = System.currentTimeMillis()
+        stage("Je cherche des photos")
         val q = subject.trim().ifEmpty { "nature" }
         val res = try {
             JSONObject(http("https://api.unsplash.com/search/photos?query=${URLEncoder.encode(q, "UTF-8")}&per_page=6&lang=fr&content_filter=high",
@@ -273,7 +298,9 @@ object Cloud {
     // ---------------------------------------------------------------- HTTP
 
     private fun http(url: String, headers: Map<String, String>, body: String?, timeout: Int): String {
+        if (cancelled) throw CloudException("arrêté")
         val c = URL(url).openConnection() as HttpURLConnection
+        current = c
         try {
             c.connectTimeout = 12_000
             c.readTimeout = timeout
@@ -302,7 +329,11 @@ object Cloud {
                 } + if (why.isNullOrBlank()) "" else " · ${why.take(140)}")
             }
             return text
+        } catch (t: java.io.IOException) {
+            if (cancelled) throw CloudException("arrêté")
+            throw t
         } finally {
+            if (current === c) current = null
             c.disconnect()
         }
     }

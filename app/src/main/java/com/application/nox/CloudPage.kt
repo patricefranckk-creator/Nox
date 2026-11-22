@@ -38,6 +38,9 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
     private val keys = CloudKeys(a)
     private val history = ArrayList<Cloud.Msg>()
     private var busy = false
+    /** Bouton d'envoi : 🎙 champ vide · ➤ texte à envoyer · ■ arrêter pendant une demande. */
+    private val action = TextView(a).apply { textSize = 20f; setTextColor(Ui.TEXT) }
+    private var ticker: Runnable? = null
     var isOpen = false; private set
 
     private val page = LinearLayout(a).apply {
@@ -100,20 +103,41 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
             setPadding(a.dp(14), a.dp(10), a.dp(14), a.dp(14))
         }
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-        val mic = a.text("🎙", 20f, Ui.TEXT).apply {
+        action.apply {
             gravity = Gravity.CENTER
             background = Ui.ripple(Ui.rounded(Ui.ACCENT, a.dp(26).toFloat()))
-            contentDescription = "Parler"
             setOnClickListener {
                 val t = input.text.toString().trim()
-                if (t.isNotEmpty()) submit() else if (voice.active) voice.stop() else { voice.patienceMs = a.prefs.patienceMs; voice.start() }
+                when {
+                    busy -> stop()
+                    t.isNotEmpty() -> submit()
+                    voice.active -> voice.stop()
+                    else -> { voice.patienceMs = a.prefs.patienceMs; voice.start() }
+                }
             }
         }
-        bar.addView(mic, LinearLayout.LayoutParams(a.dp(52), a.dp(52)).apply { marginStart = a.dp(10) })
+        bar.addView(action, LinearLayout.LayoutParams(a.dp(52), a.dp(52)).apply { marginStart = a.dp(10) })
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, af: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) = refreshAction()
+        })
+        refreshAction()
         page.addView(bar)
 
         parent.addView(page, FrameLayout.LayoutParams(-1, -1))
         intro()
+    }
+
+    private fun refreshAction() {
+        val hasText = input.text.toString().isNotBlank()
+        action.text = when { busy -> "■"; hasText -> "➤"; else -> "🎙" }
+        action.contentDescription = when { busy -> "Arrêter"; hasText -> "Envoyer"; else -> "Parler" }
+        action.background = Ui.ripple(Ui.rounded(if (busy) Ui.DANGER else Ui.ACCENT, a.dp(26).toFloat()))
+    }
+
+    private fun stop() {
+        Thread { Cloud.cancel() }.start()
     }
 
     private fun chip(label: String, onClick: () -> Unit) = a.text(label, 13f, Ui.TEXT, bold = true).apply {
@@ -164,14 +188,38 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
         if (q.isEmpty() || busy) return
         input.setText("")
         busy = true
+        refreshAction()
+        hideKeyboard()
         addUser(q)
         val (box, body, foot) = addAnswer()
-        body.text = "…"
+        // Progression : étape en cours + secondes écoulées, barre animée
+        val bar = android.widget.ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(Ui.ACCENT)
+        }
+        box.addView(bar, LinearLayout.LayoutParams(-1, a.dp(4)).apply { topMargin = a.dp(6) })
+        body.setTextColor(Ui.MUTED)
+        var stageText = "Je choisis le bon service"
+        val t0 = System.currentTimeMillis()
+        Cloud.onStage = { s -> main.post { stageText = s } }
+        val tick = object : Runnable {
+            override fun run() {
+                body.text = "$stageText… ${(System.currentTimeMillis() - t0) / 1000} s"
+                main.postDelayed(this, 500)
+            }
+        }
+        ticker?.let { main.removeCallbacks(it) }
+        ticker = tick
+        tick.run()
         val prior = history.toList()
         io.execute {
             val r = try { Result.success(Cloud.ask(q, prior, keys, a.prefs.userName)) } catch (t: Throwable) { Result.failure(t) }
             main.post {
+                main.removeCallbacks(tick)
+                box.removeView(bar)
+                body.setTextColor(Ui.ANSWER)
                 busy = false
+                refreshAction()
                 r.onSuccess { ans ->
                     body.text = Markdown.render(ans.text)
                     foot.text = "via ${ans.via} · ${String.format(Locale.FRANCE, "%.1f", ans.ms / 1000.0)} s"
@@ -183,9 +231,10 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
                     while (history.size > 24) history.removeAt(0)
                     if (a.prefs.autoSpeak && ans.photos.isEmpty() && ans.created.isEmpty()) a.voiceOut.speakAll(ans.text)
                 }.onFailure { t ->
-                    body.text = "⚠ " + (t.message ?: "erreur")
-                    body.setTextColor(Ui.DANGER)
-                    foot.text = "Touche « API » pour vérifier tes clés"
+                    val stopped = t.message == "arrêté"
+                    body.text = if (stopped) "Demande arrêtée." else "⚠ " + (t.message ?: "erreur")
+                    body.setTextColor(if (stopped) Ui.FAINT else Ui.DANGER)
+                    foot.text = if (stopped) "" else "Touche « API » pour vérifier tes clés"
                 }
                 scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
             }
