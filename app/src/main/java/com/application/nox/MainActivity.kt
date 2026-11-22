@@ -745,11 +745,80 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     @Volatile private var routing = false
 
     /** Aiguillage d'un message écrit : internet, « plus de détails », bibliothèque d'abord, ou le modèle. */
+    /**
+     * Image locale : traduction par Gemma (les petits modèles d'image ne lisent que l'anglais), pause de Gemma
+     * pour libérer la mémoire, dessin par le moteur de Lia, image dans la galerie et sous la réponse, puis Gemma revient.
+     */
+    private fun localImage(text: String, subject: String, view: TurnView, l: LlmEngine.StreamListener) {
+        val m = LocalImages.chosen()
+        if (!LocalImages.ready(m)) {
+            main.post {
+                routing = false; lastLibrary = null
+                l.onChunk("Pour créer des images sans internet, télécharge d'abord un modèle dans Menu › Images locales " +
+                    "(le plus rapide : ${LocalImages.MODELS.first().label}, ${LocalImages.MODELS.first().mb} Mo). Avec internet, Nox en ligne le fait aussi par NVIDIA.")
+                l.onDone("images locales")
+                LocalImages.showDialog(this)
+            }
+            return
+        }
+        val request = subject.trim().ifBlank { text.trim() }
+        var prompt = request
+        if (LocalImages.looksFrench(request) && engine.ready) {
+            main.post { view.body.text = "Je traduis ta demande pour le dessin…" }
+            val latch = java.util.concurrent.CountDownLatch(1)
+            val sb = StringBuilder()
+            main.post {
+                engine.send(LocalImages.translationInstruction(request), emptyList(), object : LlmEngine.StreamListener {
+                    override fun onChunk(text: String) { sb.append(text) }
+                    override fun onDone(stats: String) { latch.countDown() }
+                    override fun onError(msg: String) { latch.countDown() }
+                }, context = "")
+            }
+            latch.await(45, java.util.concurrent.TimeUnit.SECONDS)
+            prompt = LocalImages.cleanTranslation(sb.toString(), request) ?: request
+            NoxLog.i("IMAGE", "Demande traduite pour le dessin (${prompt.length} car.)")
+        }
+        val paused = java.util.concurrent.CountDownLatch(1)
+        main.post {
+            setMode(NeuronView.State.THINKING, "Je dessine…")
+            view.body.text = "Je mets Gemma en pause pour libérer la mémoire…"
+            engine.unload { paused.countDown() }
+        }
+        paused.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        val (w, h) = LocalImages.size(text)
+        val t0 = System.currentTimeMillis()
+        var stage = "chargement du modèle"
+        val tick = object : Runnable {
+            override fun run() {
+                view.body.text = "Je dessine (${m.label})… $stage · ${(System.currentTimeMillis() - t0) / 1000} s"
+                main.postDelayed(this, 500)
+            }
+        }
+        main.post(tick)
+        val r = runCatching { LocalImages.generate(m, prompt, w, h) { s -> stage = s } }
+        val uri = r.getOrNull()?.let { bytes -> runCatching { LocalImages.saveToGallery(bytes) }.getOrNull() }
+        val sec = (System.currentTimeMillis() - t0) / 1000
+        main.post {
+            main.removeCallbacks(tick)
+            routing = false; lastLibrary = null
+            if (uri != null) {
+                view.setImage(uri.toString())
+                l.onChunk("Voici ton image, dessinée sur le téléphone sans internet ($w×$h, ${m.label}). Elle est aussi dans ta galerie, dossier Images/Nox.")
+                l.onDone("image locale · ${m.label} · $sec s")
+            } else {
+                l.onError("Dessin impossible : ${r.exceptionOrNull()?.message ?: "enregistrement raté"}")
+            }
+            loadModel()   // Gemma revient
+        }
+    }
+
     private fun route(text: String, prior: List<ChatMsg>, view: TurnView, l: LlmEngine.StreamListener) {
         routing = true
         Thread {
             val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l); refreshAction() } }
             try {
+                // « Crée une image de… » dans le chat local : dessin sur le téléphone, sans internet
+                Cloud.imageRequest(text)?.let { subject -> localImage(text, subject, view, l); return@Thread }
                 val clock = Router.timeAnswer(text)
                 val cmd = if (clock == null && prefs.skillsEnabled) Commands.match(text) else null
                 val done = cmd?.let { c ->

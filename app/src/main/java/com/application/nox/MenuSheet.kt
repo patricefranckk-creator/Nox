@@ -29,6 +29,7 @@ class MenuSheet(private val a: MainActivity) {
         Entry("reglages", "⚙️", "Réglages") { SettingsDialog(a).show() },
         Entry("journal", "📈", "Journal") { JournalDialog(a).show() },
         Entry("enligne", "☁", "En ligne") { a.cloudPage.open() },
+        Entry("images", "🎨", "Images") { LocalImages.showDialog(a) },
         Entry("diagnostic", "🩺", "Diagnostic") { Diagnostic(a).show() },
         Entry("autorisations", "🔐", "Accès") { PermissionsDialog(a).show() },
     )
@@ -69,6 +70,7 @@ class MenuSheet(private val a: MainActivity) {
             Triple("🔐", "Autorisations") { PermissionsDialog(a).show() },
             Triple("📈", "Journal de bord") { JournalDialog(a).show() },
             Triple("☁", "Nox en ligne (API)") { a.cloudPage.open() },
+            Triple("🎨", "Images locales (sans internet)") { LocalImages.showDialog(a) },
             Triple("🩺", "Diagnostic complet") { Diagnostic(a).show() },
             Triple("ℹ️", "Aide & infos · v${AppInfo.version(a)}") { helpAndInfo() },
         )

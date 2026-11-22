@@ -34,6 +34,16 @@ class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
     private val toolsText: TextView
     var actions: Actions? = null
 
+    /** Image créée sur le téléphone : affichée sous la réponse, toucher = l'ouvrir dans la galerie. */
+    private val picture = ImageView(a).apply {
+        visibility = GONE
+        adjustViewBounds = true
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        background = Ui.rounded(Ui.SURFACE, a.dp(16).toFloat())
+        clipToOutline = true
+    }
+
+
     init {
         orientation = VERTICAL
         val user = msg.fromUser
@@ -80,6 +90,8 @@ class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
         toolsText = line()
         toolsLine = lineBox(ImageView(a).apply { setImageResource(drawable("ic_phone_small")); setColorFilter(0xFF7E889C.toInt()) }, toolsText, chevron = false)
         addView(toolsLine, LayoutParams(-1, a.dp(32)).apply { topMargin = a.dp(2) })
+        addView(picture, LayoutParams(a.resources.displayMetrics.widthPixels - a.dp(36), -2).apply { topMargin = a.dp(8) })
+        msg.imagePath?.let { setImage(it) }
 
         render()
         refreshFooter()
@@ -133,6 +145,24 @@ class TurnView(private val a: Context, val msg: ChatMsg) : LinearLayout(a) {
      * Sources de la réponse : titres de la bibliothèque, ou « titre » + séparateur + lien pour le web.
      * Une seule ligne grise : livre pour la bibliothèque, globe pour internet.
      */
+    fun setImage(path: String) {
+        msg.imagePath = path
+        val uri = android.net.Uri.parse(path)
+        val bmp = try {
+            a.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = 1 }) }
+        } catch (_: Throwable) { null }
+        if (bmp == null) { picture.visibility = GONE; return }
+        picture.setImageBitmap(bmp)
+        picture.visibility = VISIBLE
+        picture.contentDescription = "Image créée · toucher pour l'ouvrir"
+        picture.setOnClickListener {
+            try {
+                a.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, "image/jpeg")
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Throwable) {}
+        }
+    }
+
     fun setSources(list: List<String>) {
         msg.sources = list
         if (list.isEmpty()) { sourcesLine.visibility = GONE; return }

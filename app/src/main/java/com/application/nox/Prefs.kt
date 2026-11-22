@@ -144,6 +144,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("background", true)
         set(v) = sp.edit().putBoolean("background", v).apply()
 
+    /** Modèle d'image local choisi (Menu › Images locales). */
+    var localImageModel: String
+        get() = sp.getString("local_image_model", "") ?: ""
+        set(v) = sp.edit().putString("local_image_model", v).apply()
+
     /** Bulle Nox flottante par-dessus les autres applis quand Nox passe en arrière-plan. */
     var bubble: Boolean
         get() = sp.getBoolean("bubble", true)

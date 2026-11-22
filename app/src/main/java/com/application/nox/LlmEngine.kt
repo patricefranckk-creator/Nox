@@ -507,6 +507,12 @@ class LlmEngine(
         try { conversation?.cancelProcess() } catch (_: Throwable) {}
     }
 
+    /** Libère le modèle (mémoire) sans arrêter le moteur : un load() le recharge ensuite. [done] sur le fil principal. */
+    fun unload(done: () -> Unit) {
+        stop()
+        worker.execute { closeInternal(); System.gc(); post(done) }
+    }
+
     fun release() {
         stop()
         worker.execute { closeInternal() }

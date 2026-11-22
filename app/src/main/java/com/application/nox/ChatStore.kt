@@ -14,6 +14,8 @@ data class ChatMsg(val fromUser: Boolean, var text: String, val time: Long = Sys
     val tools = mutableListOf<String>()
     /** Relances proposées. */
     var suggestions: List<String> = emptyList()
+    /** Image créée (adresse dans la galerie), affichée sous la réponse. */
+    var imagePath: String? = null
 }
 
 /** Historique sauvegardé sur le téléphone : Nox se souvient de la conversation entre deux lancements. */
@@ -31,6 +33,7 @@ class ChatStore(ctx: Context) {
                     voice = o.optBoolean("v")
                     sources = o.optJSONArray("s")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
                     o.optJSONArray("o")?.let { a -> (0 until a.length()).forEach { tools += a.getString(it) } }
+                    imagePath = o.optString("i").ifBlank { null }
                 }
             }
         } catch (_: Exception) {
@@ -46,6 +49,7 @@ class ChatStore(ctx: Context) {
                 if (it.voice) o.put("v", true)
                 if (it.sources.isNotEmpty()) o.put("s", JSONArray(it.sources))
                 if (it.tools.isNotEmpty()) o.put("o", JSONArray(it.tools))
+                it.imagePath?.let { p -> o.put("i", p) }
                 arr.put(o)
             }
             val tmp = File(file.parentFile, file.name + ".tmp")

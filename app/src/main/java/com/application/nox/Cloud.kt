@@ -51,6 +51,9 @@ object Cloud {
 
     private val NEWS = Regex("\\b(?:actu|actus|actualites?|infos?|nouvelles|news|journal|quoi de neuf|derniere heure|a la une|gros titres)\\b")
     private val PHOTO = Regex("^(?:(?:montre|affiche|trouve|cherche)(?:[- ]moi)?|je veux voir)\\s+(?:une |des |la |les )?(?:photos?|images?|illustrations?)\\s+(?:de |d'|du |des |sur )?(.+)$")
+    /** Sujet d'une demande de création d'image (« crée une image de… »), ou null. */
+    fun imageRequest(text: String): String? = CREATE.find(Text.fold(text.trim()).trimEnd('?', '!', '.', ' '))?.groupValues?.get(1)
+
     private val CREATE = Regex("^(?:(?:cree|creer|genere|generer|dessine|dessiner|fais|faire|imagine|realise|produis|peins)(?:[- ]moi)?|je veux)\\s+(?:une |un |des |l'|la |le )?(?:image|images|illustration|dessin|photo|logo|affiche|peinture|tableau|portrait|visuel|fond d'ecran)s?\\b\\s*(?:de |d'|du |des |avec |representant |qui represente |montrant |sur )?(.*)$")
     private val COMPLEX = Regex("\\b(?:explique en detail|en detail|analyse|compare|redige|ecris(?:-moi)? (?:un|une)|code|programme|plan|strategie|pourquoi exactement|resume ce|traduis)\\b")
 
