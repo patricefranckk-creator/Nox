@@ -160,54 +160,114 @@ object Cloud {
     }
 
     // ---------------------------------------------------------------- NVIDIA : création d'images
+    // Repris de Lia (NvidiaImageApi, validé sur téléphone) : corps minimal {prompt, width, height},
+    // file d'attente NVCF (202 + NVCF-REQID → suivi toutes les secondes), délai de première réponse
+    // borné à 150 s, 6 min au total, image dans artifacts[0].base64 (ou data[0].b64_json).
 
-    /** Modèles d'image NVIDIA (adresse ai.api.nvidia.com/v1/genai/<modèle>). */
-    val IMAGE_MODELS = listOf("black-forest-labs/flux.1-dev", "black-forest-labs/flux.1-schnell", "black-forest-labs/flux-3-image-klein",
-        "stabilityai/stable-diffusion-3-medium")
+    /** Modèles d'image NVIDIA hébergés (ai.api.nvidia.com/v1/genai/<modèle>) ; schnell = rapide, dev = plus fin. */
+    val IMAGE_MODELS = listOf("black-forest-labs/flux.1-schnell", "black-forest-labs/flux.1-dev")
+
+    private const val GENAI = "https://ai.api.nvidia.com/v1/genai"
+    private const val NVCF_STATUS = "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status"
+    private const val FIRST_ANSWER_MS = 150_000L
+    private const val MAX_TOTAL_MS = 360_000L
 
     private fun create(original: String, subject: String, history: List<Msg>, keys: CloudKeys): Answer {
         val t0 = System.currentTimeMillis()
-        // FLUX comprend mieux l'anglais : on fait traduire et enrichir la demande si un modèle de langage est là
-        stage("Je prépare la description de l'image")
-        val prompt = try {
-            llm("Transforme cette demande en un prompt anglais détaillé pour un générateur d'images (sujet, style, lumière, cadrage). " +
-                "Réponds uniquement par le prompt, sans guillemets.\nDemande : $original", emptyList(), keys, "").text
-                .lines().first { it.isNotBlank() }.trim().trim('"').take(900)
-        } catch (_: Throwable) { subject.ifBlank { original } }
-        if (cancelled) throw CloudException("arrêté")
-        stage("NVIDIA dessine l'image (souvent 10 à 40 s)")
-        val img = try { image(prompt, keys) } catch (t: Throwable) {
-            keys.record(Api.NVIDIA.id, 0, t.message); throw CloudException("NVIDIA : ${t.message}")
+        // Comme dans Lia : FLUX reçoit la demande de l'utilisateur telle quelle (il lit les phrases entières)
+        val prompt = subject.trim().ifBlank { original.trim() }.let {
+            if (Regex("\\b(?:enfant|enfants|fille|garcon|garçon|bebe|bébé|ado|adolescent)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it))
+                "$it, fully clothed in everyday clothes" else it
+        }
+        val model = modelFor(Api.NVIDIA, keys)
+        val img = try { image(prompt, model, keys) } catch (t: Throwable) {
+            keys.record(Api.NVIDIA.id, 0, t.message); throw if (t is CloudException) t else CloudException("NVIDIA : ${t.message}")
         }
         val ms = System.currentTimeMillis() - t0
         keys.record(Api.NVIDIA.id, ms, null)
-        NoxLog.p("CLOUD", "Image NVIDIA ${modelFor(Api.NVIDIA, keys)} en $ms ms · « ${prompt.take(80)} »")
-        return Answer("Voici ton image. Touche-la pour l'enregistrer dans ta galerie.", "NVIDIA · ${modelFor(Api.NVIDIA, keys).substringAfterLast('/')}", ms,
+        NoxLog.p("CLOUD", "Image NVIDIA $model en $ms ms")
+        return Answer("Voici ton image. Touche-la pour l'enregistrer dans ta galerie.", "NVIDIA · ${model.substringAfterLast('/')}", ms,
             created = listOf(img))
     }
 
-    private fun image(prompt: String, keys: CloudKeys): ByteArray {
-        val model = modelFor(Api.NVIDIA, keys)
-        val url = "https://ai.api.nvidia.com/v1/genai/$model"
-        val auth = mapOf("Authorization" to "Bearer ${keys.key(Api.NVIDIA.id)}")
-        val full = JSONObject().put("prompt", prompt).put("seed", 0)
-        when {
-            model.contains("flux.1-dev") -> full.put("mode", "base").put("cfg_scale", 3.5).put("width", 1024).put("height", 1024).put("steps", 30)
-            model.contains("schnell") -> full.put("width", 1024).put("height", 1024).put("steps", 4)
+    private class NvResponse(val code: Int, val body: String, val requestId: String?)
+
+    private fun image(prompt: String, model: String, keys: CloudKeys): ByteArray {
+        val key = keys.key(Api.NVIDIA.id)
+        val body = JSONObject().put("prompt", prompt).put("width", 1024).put("height", 1024).toString()
+        val t0 = System.currentTimeMillis()
+        fun elapsed() = System.currentTimeMillis() - t0
+        stage("NVIDIA dessine l'image (schnell ≈ 5-20 s, dev ≈ 20-75 s)")
+        var r = nvSend(key, "$GENAI/$model", body, FIRST_ANSWER_MS)
+            ?: throw CloudException("NVIDIA ne répond pas depuis ${FIRST_ANSWER_MS / 1000} s (serveurs surchargés) : réessaie plus tard ou avec FLUX.1-schnell.")
+        NoxLog.i("CLOUD", "NVIDIA image HTTP ${r.code} en ${elapsed()} ms · suivi ${if (r.requestId != null) "oui" else "non"}")
+        // File d'attente NVCF : 202 (ou 504 avec identifiant) = travail en cours, on suit son état
+        var polls = 0
+        while (r.code == 202 || (r.code == 504 && r.requestId != null)) {
+            val id = r.requestId ?: throw CloudException("NVIDIA a mis l'image en file d'attente sans identifiant de suivi.")
+            if (elapsed() > MAX_TOTAL_MS) throw CloudException("NVIDIA n'a pas terminé l'image en ${MAX_TOTAL_MS / 60_000} minutes (file d'attente chargée) : réessaie plus tard.")
+            if (cancelled) throw CloudException("arrêté")
+            stage("NVIDIA : image en file d'attente, suivi n°${polls + 1}")
+            Thread.sleep(1000)
+            r = nvSend(key, "$NVCF_STATUS/$id", null, null)
+                ?: throw CloudException("NVIDIA ne répond plus pendant le suivi de l'image : réessaie plus tard.")
+            polls++
         }
-        val raw = try { http(url, auth, full.toString(), 90_000) } catch (e: CloudException) {
-            // Chaque modèle a son propre format : en cas de refus du corps, on retente avec le strict minimum
-            if (e.message?.startsWith("HTTP 4") == true && !cancelled) http(url, auth, JSONObject().put("prompt", prompt).toString(), 90_000) else throw e
-        } catch (e: java.net.SocketTimeoutException) {
-            throw CloudException("NVIDIA n'a pas répondu en 90 s, réessaie ou choisis FLUX.1-schnell (plus rapide)")
+        if (polls > 0 && r.code == 404) throw CloudException("NVIDIA n'a pas pu terminer l'image (demande expirée après ${elapsed() / 60_000} min) : réessaie plus tard.")
+        if (r.code !in 200..299) {
+            val why = try { JSONObject(r.body).let { j -> j.optString("detail").ifBlank { j.optString("title") }.ifBlank { j.optJSONObject("error")?.optString("message").orEmpty() } } } catch (_: Throwable) { "" }
+            throw CloudException(when (r.code) {
+                401 -> "clé NVIDIA refusée (401)"
+                403 -> "accès refusé à ce modèle (403) : vérifie sur build.nvidia.com que la clé y a droit"
+                404 -> "modèle NVIDIA introuvable (404)"
+                422 -> "demande refusée par NVIDIA (422)"
+                429 -> "quota NVIDIA atteint (429), réessaie dans un moment"
+                else -> "NVIDIA HTTP ${r.code}"
+            } + if (why.isBlank()) "" else " · ${why.take(140)}")
         }
-        val art = JSONObject(raw).optJSONArray("artifacts")?.optJSONObject(0) ?: throw CloudException("pas d'image dans la réponse")
-        when (art.optString("finishReason")) {
-            "CONTENT_FILTERED" -> throw CloudException("image refusée par le filtre de contenu")
-            "ERROR" -> throw CloudException("le générateur a échoué")
-        }
-        val b64 = art.optString("base64").ifBlank { throw CloudException("image vide") }
+        val json = try { JSONObject(r.body) } catch (_: Throwable) { throw CloudException("NVIDIA a répondu sans image exploitable") }
+        val art = json.optJSONArray("artifacts")?.optJSONObject(0)
+        if (art?.optString("finishReason") == "CONTENT_FILTERED") throw CloudException("image refusée par le filtre de contenu de NVIDIA")
+        val b64 = art?.optString("base64")?.takeIf { it.isNotBlank() }
+            ?: json.optJSONArray("data")?.optJSONObject(0)?.optString("b64_json")?.takeIf { it.isNotBlank() }
+            ?: throw CloudException("NVIDIA a répondu sans image exploitable")
         return android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+    }
+
+    /** POST (ou GET si [body] est nul). Null si [deadlineMs] passe avant la première réponse (connexion coupée). */
+    private fun nvSend(key: String, url: String, body: String?, deadlineMs: Long?): NvResponse? {
+        if (cancelled) throw CloudException("arrêté")
+        val c = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = if (body != null) "POST" else "GET"
+            connectTimeout = 20_000
+            readTimeout = 310_000
+            setRequestProperty("Authorization", "Bearer $key")
+            setRequestProperty("Accept", "application/json")
+            if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json") }
+        }
+        current = c
+        val hit = java.util.concurrent.atomic.AtomicBoolean(false)
+        val timer = deadlineMs?.let { ms ->
+            java.util.Timer("nox-nvidia", true).apply {
+                schedule(object : java.util.TimerTask() { override fun run() { hit.set(true); c.disconnect() } }, ms)
+            }
+        }
+        try {
+            if (body != null) c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = try { c.responseCode } catch (t: Throwable) {
+                if (cancelled) throw CloudException("arrêté")
+                if (hit.get()) return null
+                throw t
+            } finally { timer?.cancel() }
+            val text = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+            return NvResponse(code, text, c.getHeaderField("NVCF-REQID"))
+        } catch (t: java.io.IOException) {
+            if (cancelled) throw CloudException("arrêté")
+            throw t
+        } finally {
+            if (current === c) current = null
+            c.disconnect()
+        }
     }
 
     // ---------------------------------------------------------------- GNews
@@ -278,8 +338,10 @@ object Cloud {
                 "OK · $n articles disponibles"
             }
             Api.NVIDIA -> {
-                val img = image("a small red apple on a wooden table, soft daylight", keys)
-                "OK · image de ${img.size / 1024} Ko générée avec ${modelFor(Api.NVIDIA, keys).substringAfterLast('/')}"
+                cancelled = false
+                val model = modelFor(Api.NVIDIA, keys)
+                val img = image("a single small red circle on a white background", model, keys)
+                "OK · image de ${img.size / 1024} Ko générée avec ${model.substringAfterLast('/')}"
             }
             Api.UNSPLASH -> {
                 http("https://api.unsplash.com/photos/random?count=1", mapOf("Authorization" to "Client-ID $key", "Accept-Version" to "v1"), null, 15_000)

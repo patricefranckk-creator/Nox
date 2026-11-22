@@ -392,7 +392,7 @@ class CloudApisDialog(private val a: MainActivity, private val keys: CloudKeys, 
         var model: EditText? = null
         if (api.llm || api == Cloud.Api.NVIDIA) {
             val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, a.dp(8), 0, 0) }
-            model = field(if (api == Cloud.Api.NVIDIA) "modèle d'image : auto (FLUX.1-dev)" else "modèle : auto").apply { setText(keys.model(api.id)); textSize = 13.5f }
+            model = field(if (api == Cloud.Api.NVIDIA) "modèle d'image : auto (FLUX.1-schnell)" else "modèle : auto").apply { setText(keys.model(api.id)); textSize = 13.5f }
             row.addView(model, LinearLayout.LayoutParams(0, -2, 1f))
             val m = model
             row.addView(a.pillButton("Modèles", filled = false) { pickModel(api, key, m) },
@@ -436,7 +436,7 @@ class CloudApisDialog(private val a: MainActivity, private val keys: CloudKeys, 
     private fun pickModel(api: Cloud.Api, key: EditText, target: EditText) {
         save(api, key to null)
         if (api == Cloud.Api.NVIDIA) {
-            val items = (listOf("auto (FLUX.1-dev)") + Cloud.IMAGE_MODELS).toTypedArray<CharSequence>()
+            val items = (listOf("auto (FLUX.1-schnell, rapide)") + Cloud.IMAGE_MODELS).toTypedArray<CharSequence>()
             NoxDialog.sheet(a).setTitle("Modèle d'image NVIDIA")
                 .setItems(items) { _, i -> target.setText(if (i == 0) "" else Cloud.IMAGE_MODELS[i - 1]) }
                 .setNegativeButton("Annuler", null).show()
