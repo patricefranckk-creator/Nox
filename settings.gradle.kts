@@ -22,3 +22,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Nox"
 include(":app")
+include(":imagegen")
+include(":imagegen-fast")

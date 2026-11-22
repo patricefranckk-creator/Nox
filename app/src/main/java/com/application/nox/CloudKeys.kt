@@ -18,6 +18,14 @@ class CloudKeys(ctx: Context) {
 
     private val sp = ctx.getSharedPreferences("nox_cloud", Context.MODE_PRIVATE)
 
+    init {
+        // FLUX.1-dev devient le modèle d'image par défaut (meilleure qualité gratuite) : une seule fois
+        if (!sp.getBoolean("img_v2", false)) {
+            if (sp.getString("m_nvidia", "") == "black-forest-labs/flux.1-schnell") sp.edit().putString("m_nvidia", "").apply()
+            sp.edit().putBoolean("img_v2", true).apply()
+        }
+    }
+
     fun key(api: String): String = sp.getString("k_$api", null)?.let { decrypt(it) }.orEmpty()
 
     fun setKey(api: String, value: String) {

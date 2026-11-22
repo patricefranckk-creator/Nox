@@ -30,7 +30,7 @@ object Cloud {
     data class Msg(val role: String, val text: String)
     data class Photo(val url: String, val author: String, val link: String, val description: String)
     data class Answer(val text: String, val via: String, val ms: Long, val sources: List<String> = emptyList(),
-                      val photos: List<Photo> = emptyList(), val created: List<ByteArray> = emptyList())
+                      val photos: List<Photo> = emptyList(), val created: List<ByteArray> = emptyList(), val imagePrompt: String = "")
 
     class CloudException(msg: String) : Exception(msg)
 
@@ -165,7 +165,44 @@ object Cloud {
     // borné à 150 s, 6 min au total, image dans artifacts[0].base64 (ou data[0].b64_json).
 
     /** Modèles d'image NVIDIA hébergés (ai.api.nvidia.com/v1/genai/<modèle>) ; schnell = rapide, dev = plus fin. */
-    val IMAGE_MODELS = listOf("black-forest-labs/flux.1-schnell", "black-forest-labs/flux.1-dev")
+    val IMAGE_MODELS = listOf("black-forest-labs/flux.1-dev", "black-forest-labs/flux.1-schnell")
+
+    // Styles et netteté repris de Lia (NvidiaImageStyle, NvidiaImagePromptBuilder)
+    private val STYLES = listOf(
+        Regex("\\b(?:aquarelle)\\b") to "watercolor painting, soft washes of color",
+        Regex("\\b(?:dessin|crayon|croquis|encre|esquisse)\\b") to "pencil or ink drawing, hand-drawn sketch style",
+        Regex("\\b(?:manga|anime|bd|bande dessinee|cartoon|dessin anime)\\b") to "digital illustration, clean line art, vibrant colors",
+        Regex("\\b(?:illustration|illustre)\\b") to "digital illustration",
+        Regex("\\b(?:peinture|huile|tableau|toile)\\b") to "painting, visible brush strokes",
+        Regex("\\b(?:affiche|poster|logo|flyer)\\b") to "poster design, bold graphic layout, clean typography-friendly composition",
+        Regex("\\b(?:concept art|fantasy|science-fiction|sci-fi)\\b") to "concept art, professional visual development artwork",
+        Regex("\\b(?:photo|photographie|realiste|portrait)\\b") to "photorealistic photograph, realistic lighting and textures",
+    )
+    private const val FLUX_SHARP = "crisp fine details, high resolution"
+    private const val FLUX_DEEP_FOCUS = "deep focus photograph shot at f/11, the subject and the whole background in sharp focus"
+
+    /** Description envoyée à FLUX : la demande d'abord, intacte, puis le style et la netteté (comme Lia). */
+    fun imagePrompt(request: String): String {
+        val f = Text.fold(request)
+        val parts = mutableListOf(request.trim())
+        if (Regex("\\b(?:enfant|enfants|fille|fillette|garcon|bebe|ado|adolescent|petite fille|petit garcon)\\b").containsMatchIn(f)) parts += "fully clothed in everyday clothes"
+        val style = STYLES.firstOrNull { it.first.containsMatchIn(f) }
+        style?.let { parts += it.second }
+        val photoLike = style == null || style.second.startsWith("photorealistic")
+        if (photoLike) parts += FLUX_DEEP_FOCUS
+        parts += FLUX_SHARP
+        return parts.joinToString(", ")
+    }
+
+    /** Format : portrait 768×1344, paysage 1344×768, sinon carré 1024 (tailles documentées de FLUX, comme Lia). */
+    private fun dimensions(request: String): Pair<Int, Int> {
+        val f = Text.fold(request)
+        return when {
+            Regex("\\b(?:portrait|vertical|verticale|fond d'ecran|story|telephone)\\b").containsMatchIn(f) -> 768 to 1344
+            Regex("\\b(?:paysage|panoramique|horizontal|horizontale|banniere|16/9|16:9)\\b").containsMatchIn(f) -> 1344 to 768
+            else -> 1024 to 1024
+        }
+    }
 
     private const val GENAI = "https://ai.api.nvidia.com/v1/genai"
     private const val NVCF_STATUS = "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status"
@@ -174,27 +211,26 @@ object Cloud {
 
     private fun create(original: String, subject: String, history: List<Msg>, keys: CloudKeys): Answer {
         val t0 = System.currentTimeMillis()
-        // Comme dans Lia : FLUX reçoit la demande de l'utilisateur telle quelle (il lit les phrases entières)
-        val prompt = subject.trim().ifBlank { original.trim() }.let {
-            if (Regex("\\b(?:enfant|enfants|fille|garcon|garçon|bebe|bébé|ado|adolescent)\\b", RegexOption.IGNORE_CASE).containsMatchIn(it))
-                "$it, fully clothed in everyday clothes" else it
-        }
+        // Comme dans Lia : la demande telle quelle (FLUX lit les phrases entières), puis style et netteté
+        val request = subject.trim().ifBlank { original.trim() }
+        val prompt = imagePrompt(request)
+        val (w, h) = dimensions(original)
         val model = modelFor(Api.NVIDIA, keys)
-        val img = try { image(prompt, model, keys) } catch (t: Throwable) {
+        val img = try { image(prompt, model, keys, w, h) } catch (t: Throwable) {
             keys.record(Api.NVIDIA.id, 0, t.message); throw if (t is CloudException) t else CloudException("NVIDIA : ${t.message}")
         }
         val ms = System.currentTimeMillis() - t0
         keys.record(Api.NVIDIA.id, ms, null)
         NoxLog.p("CLOUD", "Image NVIDIA $model en $ms ms")
-        return Answer("Voici ton image. Touche-la pour l'enregistrer dans ta galerie.", "NVIDIA · ${model.substringAfterLast('/')}", ms,
-            created = listOf(img))
+        return Answer("Voici ton image ($w×$h).", "NVIDIA · ${model.substringAfterLast('/')}", ms,
+            created = listOf(img), imagePrompt = request)
     }
 
     private class NvResponse(val code: Int, val body: String, val requestId: String?)
 
-    private fun image(prompt: String, model: String, keys: CloudKeys): ByteArray {
+    private fun image(prompt: String, model: String, keys: CloudKeys, width: Int = 1024, height: Int = 1024): ByteArray {
         val key = keys.key(Api.NVIDIA.id)
-        val body = JSONObject().put("prompt", prompt).put("width", 1024).put("height", 1024).toString()
+        val body = JSONObject().put("prompt", prompt).put("width", width).put("height", height).toString()
         val t0 = System.currentTimeMillis()
         fun elapsed() = System.currentTimeMillis() - t0
         stage("NVIDIA dessine l'image (schnell ≈ 5-20 s, dev ≈ 20-75 s)")

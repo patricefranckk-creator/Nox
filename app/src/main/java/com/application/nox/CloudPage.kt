@@ -225,7 +225,7 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
                     foot.text = "via ${ans.via} · ${String.format(Locale.FRANCE, "%.1f", ans.ms / 1000.0)} s"
                     if (ans.sources.isNotEmpty()) box.addView(sources(ans.sources))
                     if (ans.photos.isNotEmpty()) box.addView(photos(ans.photos))
-                    ans.created.forEach { box.addView(created(it)) }
+                    ans.created.forEach { box.addView(created(it, ans.imagePrompt)) }
                     history += Cloud.Msg("user", q)
                     history += Cloud.Msg("assistant", ans.text)
                     while (history.size > 24) history.removeAt(0)
@@ -296,20 +296,56 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
         return HorizontalScrollView(a).apply { isHorizontalScrollBarEnabled = false; addView(row) }
     }
 
-    /** Image créée par NVIDIA : affichée en grand, toucher = enregistrer dans la galerie (Images/Nox). */
-    private fun created(bytes: ByteArray): View {
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    /** Image créée par NVIDIA : affichée en grand, « Enregistrer » et « Agrandir en HD » (Real-ESRGAN sur le téléphone). */
+    private fun created(first: ByteArray, prompt: String): View {
+        var bytes = first
+        val col = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(0, a.dp(10), 0, 0) }
         val w = a.resources.displayMetrics.widthPixels - a.dp(36)
-        return ImageView(a).apply {
-            setImageBitmap(bmp)
+        val img = ImageView(a).apply {
+            setImageBitmap(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
             adjustViewBounds = true
             scaleType = ImageView.ScaleType.FIT_CENTER
             background = Ui.rounded(Ui.SURFACE, a.dp(16).toFloat())
             clipToOutline = true
-            contentDescription = "Image créée · touche pour l'enregistrer"
-            layoutParams = LinearLayout.LayoutParams(w, -2).apply { topMargin = a.dp(10) }
-            setOnClickListener { save(bytes) }
+            contentDescription = "Image créée"
         }
+        col.addView(img, LinearLayout.LayoutParams(w, -2))
+        val info = a.text("", 12.5f, Ui.MUTED).apply { setPadding(0, a.dp(6), 0, 0) }
+        val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, a.dp(8), 0, 0) }
+        row.addView(a.pillButton("Enregistrer") { save(bytes) })
+        lateinit var hd: TextView
+        hd = a.pillButton("Agrandir en HD", filled = false) {
+            if (busy) return@pillButton
+            busy = true; refreshAction()
+            hd.isEnabled = false; hd.alpha = 0.5f
+            var stage = "Préparation"
+            val t0 = System.currentTimeMillis()
+            val tick = object : Runnable {
+                override fun run() { info.text = "$stage… ${(System.currentTimeMillis() - t0) / 1000} s"; main.postDelayed(this, 500) }
+            }
+            tick.run()
+            io.execute {
+                val r = try { Result.success(ImageHd.enlarge(bytes, prompt) { s -> main.post { stage = s } }) } catch (t: Throwable) { Result.failure(t) }
+                main.post {
+                    main.removeCallbacks(tick)
+                    busy = false; refreshAction()
+                    r.onSuccess { out ->
+                        bytes = out
+                        val bmp = BitmapFactory.decodeByteArray(out, 0, out.size)
+                        img.setImageBitmap(bmp)
+                        info.text = "HD ${bmp.width}×${bmp.height} · ${(System.currentTimeMillis() - t0) / 1000} s · « Enregistrer » garde la version HD"
+                        hd.text = "HD ✓"
+                    }.onFailure {
+                        info.text = "Agrandissement impossible : ${it.message}"
+                        hd.isEnabled = true; hd.alpha = 1f
+                    }
+                }
+            }
+        }
+        row.addView(hd, LinearLayout.LayoutParams(-2, a.dp(44)).apply { marginStart = a.dp(8) })
+        col.addView(row)
+        col.addView(info)
+        return col
     }
 
     private fun save(bytes: ByteArray) {
@@ -392,7 +428,7 @@ class CloudApisDialog(private val a: MainActivity, private val keys: CloudKeys, 
         var model: EditText? = null
         if (api.llm || api == Cloud.Api.NVIDIA) {
             val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, a.dp(8), 0, 0) }
-            model = field(if (api == Cloud.Api.NVIDIA) "modèle d'image : auto (FLUX.1-schnell)" else "modèle : auto").apply { setText(keys.model(api.id)); textSize = 13.5f }
+            model = field(if (api == Cloud.Api.NVIDIA) "modèle d'image : auto (FLUX.1-dev)" else "modèle : auto").apply { setText(keys.model(api.id)); textSize = 13.5f }
             row.addView(model, LinearLayout.LayoutParams(0, -2, 1f))
             val m = model
             row.addView(a.pillButton("Modèles", filled = false) { pickModel(api, key, m) },
@@ -436,7 +472,7 @@ class CloudApisDialog(private val a: MainActivity, private val keys: CloudKeys, 
     private fun pickModel(api: Cloud.Api, key: EditText, target: EditText) {
         save(api, key to null)
         if (api == Cloud.Api.NVIDIA) {
-            val items = (listOf("auto (FLUX.1-schnell, rapide)") + Cloud.IMAGE_MODELS).toTypedArray<CharSequence>()
+            val items = (listOf("auto (FLUX.1-dev, meilleure qualité)") + Cloud.IMAGE_MODELS).toTypedArray<CharSequence>()
             NoxDialog.sheet(a).setTitle("Modèle d'image NVIDIA")
                 .setItems(items) { _, i -> target.setText(if (i == 0) "" else Cloud.IMAGE_MODELS[i - 1]) }
                 .setNegativeButton("Annuler", null).show()

@@ -70,4 +70,7 @@ kotlin {
 dependencies {
     // Moteur LLM local de Google (GPU / CPU, MTP, Gemma 4)
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.1")
+    // Agrandissement HD des images (Real-ESRGAN via stable-diffusion.cpp, repris de Lia)
+    implementation(project(":imagegen"))
+    implementation(project(":imagegen-fast"))
 }

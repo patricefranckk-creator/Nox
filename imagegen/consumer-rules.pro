@@ -1,0 +1,1 @@
+-keep class com.localia.imagegen.StableDiffusionNative { native <methods>; }
