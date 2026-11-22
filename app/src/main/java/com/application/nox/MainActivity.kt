@@ -46,6 +46,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     lateinit var voiceOut: VoiceOut
     lateinit var gauges: GaugePanel
     private lateinit var voicePage: VoicePage
+    lateinit var cloudPage: CloudPage
+    private lateinit var swipe: android.view.GestureDetector
     private var voiceIn: VoiceIn? = null
     private var capture: AudioCapture? = null
     private var pendingImage: ByteArray? = null
@@ -93,6 +95,18 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         gauges = GaugePanel(this, root) { header.bottom }
         gauges.onChange = { open -> styleGaugeButton(open) }
         voicePage = VoicePage(this, root)
+        cloudPage = CloudPage(this, root)
+        // Glisser vers la gauche : « Nox en ligne » · vers la droite : retour au chat local
+        swipe = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onFling(e1: android.view.MotionEvent?, e2: android.view.MotionEvent, vx: Float, vy: Float): Boolean {
+                if (e1 == null || voicePage.isOpen) return false
+                val dx = e2.x - e1.x; val dy = e2.y - e1.y
+                if (kotlin.math.abs(dx) < dp(110) || kotlin.math.abs(dx) < kotlin.math.abs(dy) * 2) return false
+                if (dx < 0 && !cloudPage.isOpen) { cloudPage.open(); return true }
+                if (dx > 0 && cloudPage.isOpen) { cloudPage.close(); return true }
+                return false
+            }
+        })
         setMode(NeuronView.State.OFF, "")
 
         if (messages.isEmpty()) addTurn(ChatMsg(false, welcomeText()), save = false, register = false)
@@ -610,8 +624,19 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     @Deprecated("Deprecated in Java")
     @Suppress("DEPRECATION")
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (::swipe.isInitialized && swipe.onTouchEvent(ev)) {
+            ev.action = android.view.MotionEvent.ACTION_CANCEL
+            super.dispatchTouchEvent(ev)
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onBackPressed() {
-        if (::voicePage.isInitialized && voicePage.isOpen) closeVoicePage() else super.onBackPressed()
+        if (::voicePage.isInitialized && voicePage.isOpen) closeVoicePage()
+        else if (::cloudPage.isInitialized && cloudPage.isOpen) cloudPage.close()
+        else super.onBackPressed()
     }
 
     fun closeVoicePage() {
