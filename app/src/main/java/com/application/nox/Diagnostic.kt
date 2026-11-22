@@ -569,6 +569,7 @@ class Diagnostic(private val a: MainActivity) {
         c.line("Accessibilité (pilotage de l'écran) : ${oui(acc)}")
         c.line("Lecture des notifications (réponses WhatsApp…) : ${oui(notif)}")
         c.line("Nox est l'assistant par défaut (bouton power) : ${oui(assistant)}")
+        c.line("Bulle flottante : ${oui(Nox.prefs.bubble)} · possible ${oui(Bubble.possible(a))} · micro en arrière-plan ${oui(NoxService.micReady)}")
         c.line("Confirmation des actions sensibles : ${oui(Nox.prefs.confirmSensitive)} · compétences ${oui(Nox.prefs.skillsEnabled)}")
         c.line("Outils disponibles : ${Nox.skills.all.joinToString { it.name }}")
         val apps = listOf("com.whatsapp" to "WhatsApp", "com.google.android.apps.maps" to "Maps", "com.deezer.android.app" to "Deezer",

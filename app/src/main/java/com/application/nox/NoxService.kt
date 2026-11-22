@@ -26,17 +26,29 @@ class NoxService : Service() {
             return START_NOT_STICKY
         }
         if (!Nox.started) Nox.init(this)
+        val note = build(this, intent?.getStringExtra(EXTRA_STATUS) ?: lastStatus)
+        // Micro inclus : la bulle peut écouter pendant qu'une autre appli est à l'écran
+        val mic = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
         try {
-            startForeground(ID, build(this, intent?.getStringExtra(EXTRA_STATUS) ?: lastStatus), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(ID, note, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0))
+            micReady = mic
         } catch (t: Throwable) {
-            NoxLog.w("APP", "Service d'arrière-plan refusé par Android", t)
-            stopSelf()
+            try {
+                startForeground(ID, note, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                micReady = false
+                NoxLog.w("APP", "Service sans micro (démarré hors de l'écran) : la bulle ouvrira Nox pour écouter", t)
+            } catch (t2: Throwable) {
+                NoxLog.w("APP", "Service d'arrière-plan refusé par Android", t2)
+                stopSelf()
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
         running = false
+        micReady = false
         super.onDestroy()
     }
 
@@ -46,11 +58,18 @@ class NoxService : Service() {
         private const val ACTION_QUIT = "com.application.nox.QUIT"
         private const val EXTRA_STATUS = "status"
         @Volatile var running = false; private set
+        /** Le service a le droit au micro en arrière-plan (démarré pendant que Nox était à l'écran). */
+        @Volatile var micReady = false; private set
         private var lastStatus = "Nox veille"
 
         fun start(ctx: Context, status: String) {
             lastStatus = status
             if (!Nox.prefs.background) return
+            if (running) {
+                // Déjà au premier plan : on met juste la notification à jour (garder le droit au micro)
+                try { ctx.getSystemService(NotificationManager::class.java).notify(ID, build(ctx, status)) } catch (_: Throwable) {}
+                return
+            }
             try {
                 ctx.startForegroundService(Intent(ctx, NoxService::class.java).putExtra(EXTRA_STATUS, status))
                 running = true

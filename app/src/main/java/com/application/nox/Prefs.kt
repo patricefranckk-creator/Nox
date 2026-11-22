@@ -144,6 +144,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("background", true)
         set(v) = sp.edit().putBoolean("background", v).apply()
 
+    /** Bulle Nox flottante par-dessus les autres applis quand Nox passe en arrière-plan. */
+    var bubble: Boolean
+        get() = sp.getBoolean("bubble", true)
+        set(v) = sp.edit().putBoolean("bubble", v).apply()
+
     /** Le centre des autorisations a déjà été présenté au premier lancement. */
     var permsShown: Boolean
         get() = sp.getBoolean("perms_shown", false)

@@ -45,6 +45,7 @@ object Nox {
 
     /** « Fermer l'app » : on libère tout et on termine le processus. */
     fun shutdown() {
+        Bubble.hide()
         NoxLog.i("APP", "Fermeture complète demandée")
         if (loading) prefs.loadInProgress = false
         try { chats.save(messages) } catch (_: Throwable) {}

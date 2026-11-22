@@ -133,6 +133,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onResume() {
         super.onResume()
         Nox.ui = this
+        Bubble.hide()
         main.removeCallbacks(autoPlug)
         main.postDelayed(autoPlug, 3000)
         PermissionsDialog.current?.refresh()
@@ -148,6 +149,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         super.onPause()
         stopListening()
         chats.save(messages)
+        // Nox passe derrière une autre appli : la bulle reste à portée de doigt
+        if (prefs.bubble && prefs.background && engine.ready && !isFinishing && !isChangingConfigurations) {
+            Bubble.show(this)
+            Bubble.state(mode)
+        }
     }
 
     override fun onDestroy() {
@@ -156,6 +162,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         capture?.cancel()
         voiceOut.release()
         if (Nox.ui === this) Nox.ui = null
+        if (isFinishing) Bubble.hide()
         super.onDestroy()
         // Sans arrière-plan, quitter l'écran libère vraiment le modèle
         if (isFinishing && !isChangingConfigurations && !prefs.background) Nox.shutdown()
@@ -163,6 +170,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     /** « Fermer l'app » du menu : tout s'arrête, modèle compris. */
     fun closeApp() {
+        Bubble.hide()
         finishAndRemoveTask()
         main.postDelayed({ Nox.shutdown() }, 250)
     }
@@ -445,6 +453,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         mode = state
         neuron.state = state
         if (::voicePage.isInitialized) voicePage.set(state, hint)
+        Bubble.state(state)
         val (dot, label) = when (state) {
             NeuronView.State.OFF -> (if (Nox.loading) Ui.AMBER else Ui.FAINT) to (if (Nox.loading) "réveil…" else "endormi")
             NeuronView.State.IDLE -> 0xFF5FD39A.toInt() to "prêt · ${engine.modelLabel} · ${engine.backendLabel}"
@@ -787,6 +796,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     private fun finishTurn(spoken: Boolean) {
         streamingView = null
+        if (Bubble.shown) messages.lastOrNull()?.takeIf { !it.fromUser }?.let { Bubble.say(it.text) }
         chats.save(messages)
         if (spoken) voiceOut.endStream()
         if (!voiceOut.speaking && !listeningNow) setMode(NeuronView.State.IDLE, idleHint())

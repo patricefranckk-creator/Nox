@@ -126,6 +126,8 @@ class SettingsDialog(private val a: MainActivity) {
         body.addView(a.sectionTitle("Arrière-plan & pilotage"))
         val bg = switch("Garder Nox prêt en arrière-plan (bouton power instantané)", p.background)
         body.addView(bg)
+        val bubble = switch("Bulle Nox par-dessus les applis (touche : parler · appui long : ouvrir)", p.bubble)
+        body.addView(bubble)
         val confirm = switch("Demander confirmation avant d'envoyer, payer ou supprimer dans une appli", p.confirmSensitive)
         body.addView(confirm)
         body.addView(a.pillButton("Autorisations…", filled = false) { PermissionsDialog(a).show() }
@@ -171,6 +173,14 @@ class SettingsDialog(private val a: MainActivity) {
             p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
             p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
             p.background = bg.isChecked
+            p.bubble = bubble.isChecked
+            if (p.bubble && !Bubble.possible(a)) {
+                a.toast("Pour la bulle : active le pilotage de Nox (accessibilité) ou autorise la superposition")
+                try {
+                    a.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:" + a.packageName)))
+                } catch (_: Throwable) {}
+            }
             p.confirmSensitive = confirm.isChecked
 
             val reload = p.backend != oldBackend || p.turbo != oldTurbo || p.contextTokens != oldCtx || p.listenMode != oldListen || p.vision != oldVision

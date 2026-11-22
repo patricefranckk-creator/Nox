@@ -30,6 +30,7 @@ class NoxAccess : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
+        Bubble.hide()
         instance = null
         NoxLog.i("ECRAN", "Service d'accessibilité déconnecté")
         return super.onUnbind(intent)
