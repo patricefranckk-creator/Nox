@@ -144,6 +144,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("background", true)
         set(v) = sp.edit().putBoolean("background", v).apply()
 
+    /** Images locales agrandies ×4 en HD juste après le dessin. */
+    var localImageHd: Boolean
+        get() = sp.getBoolean("local_image_hd", true)
+        set(v) = sp.edit().putBoolean("local_image_hd", v).apply()
+
     /** Modèle d'image local choisi (Menu › Images locales). */
     var localImageModel: String
         get() = sp.getString("local_image_model", "") ?: ""

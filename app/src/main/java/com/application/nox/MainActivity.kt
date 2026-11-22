@@ -785,7 +785,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             engine.unload { paused.countDown() }
         }
         paused.await(30, java.util.concurrent.TimeUnit.SECONDS)
-        val (w, h) = LocalImages.size(text)
+        val (w, h) = LocalImages.size(text, m.scale)
         val t0 = System.currentTimeMillis()
         var stage = "chargement du modèle"
         val tick = object : Runnable {
@@ -795,7 +795,14 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             }
         }
         main.post(tick)
-        val r = runCatching { LocalImages.generate(m, prompt, w, h) { s -> stage = s } }
+        val r = runCatching {
+            val drawn = LocalImages.generate(m, prompt, w, h) { s -> stage = s }
+            // Pas assez de pixels en 512 : agrandissement ×4 par Real-ESRGAN (Gemma est encore en pause, la mémoire est libre)
+            if (prefs.localImageHd) runCatching { ImageHd.enlarge(drawn, prompt, sourceMax = w * h) { s -> stage = s } }
+                .onFailure { NoxLog.w("IMAGE", "Agrandissement HD raté, image gardée en ${w}×$h", it) }.getOrDefault(drawn)
+            else drawn
+        }
+        val hdSize = if (prefs.localImageHd && r.isSuccess) "${w * 4}×${h * 4}" else "$w×$h"
         val uri = r.getOrNull()?.let { bytes -> runCatching { LocalImages.saveToGallery(bytes) }.getOrNull() }
         val sec = (System.currentTimeMillis() - t0) / 1000
         main.post {
@@ -803,7 +810,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             routing = false; lastLibrary = null
             if (uri != null) {
                 view.setImage(uri.toString())
-                l.onChunk("Voici ton image, dessinée sur le téléphone sans internet ($w×$h, ${m.label}). Elle est aussi dans ta galerie, dossier Images/Nox.")
+                l.onChunk("Voici ton image, dessinée sur le téléphone sans internet ($hdSize, ${m.label}). Elle est aussi dans ta galerie, dossier Images/Nox.")
                 l.onDone("image locale · ${m.label} · $sec s")
             } else {
                 l.onError("Dessin impossible : ${r.exceptionOrNull()?.message ?: "enregistrement raté"}")

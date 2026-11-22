@@ -30,7 +30,8 @@ import java.net.URL
 object LocalImages {
 
     data class Model(val id: String, val label: String, val url: String, val mb: Int, val steps: Int, val cfg: Float,
-                     val minFreeMb: Int, val note: String, val negative: String = "")
+                     val minFreeMb: Int, val note: String, val negative: String = "",
+                     val sampler: String = "", val stream: Boolean = false, val scale: Float = 1f)
 
     val MODELS = listOf(
         Model("sdxs-512", "SDXS 512 · rapide",
@@ -43,6 +44,11 @@ object LocalImages {
             "https://huggingface.co/second-state/Realistic_Vision_V6.0_B1-GGUF/resolve/main/realisticVisionV60B1_v51HyperVAE-Q8_0.gguf?download=true",
             1770, 5, 1.5f, 2500, "Photos et visages réalistes, 1 à 2 minutes par image.",
             "nsfw, nude, deformed, disfigured, bad anatomy, extra limbs, extra fingers, blurry, out of focus, bokeh, lowres, cartoon, painting, watermark, text"),
+        Model("realvisxl-v5-lightning", "RealVisXL · SDXL 768 px",
+            "https://huggingface.co/off-grid-ai/realvisxl-v5.0-lightning-GGUF/resolve/main/realvisxl-v5.0-lightning-Q8_0.gguf?download=true",
+            4180, 6, 1.5f, 1500, "Photo SDXL dessinée en 768 px, détails fins. Lu par morceaux depuis le fichier : plusieurs minutes par image.",
+            "nsfw, nude, naked, deformed, disfigured, bad anatomy, extra limbs, extra fingers, blurry, out of focus, bokeh, lowres, watermark, text",
+            sampler = "euler", stream = true, scale = 1.5f),
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -54,13 +60,15 @@ object LocalImages {
         ?: MODELS.firstOrNull { ready(it) } ?: MODELS.first { it.id == Nox.prefs.localImageModel.ifBlank { "sdxs-512" } }
 
     /** Tailles des modèles SD 1.x (multiples de 64, base 512), comme Lia. */
-    fun size(request: String): Pair<Int, Int> {
+    fun size(request: String, scale: Float = 1f): Pair<Int, Int> {
         val f = Text.fold(request)
-        return when {
+        val (w, h) = when {
             Regex("\\b(?:portrait|vertical|verticale|fond d'ecran|story)\\b").containsMatchIn(f) -> 512 to 768
             Regex("\\b(?:paysage|panoramique|horizontal|horizontale|banniere)\\b").containsMatchIn(f) -> 768 to 512
             else -> 512 to 512
         }
+        fun r(v: Int) = ((v * scale / 64f).toInt() * 64)
+        return r(w) to r(h)
     }
 
     // ---------------------------------------------------------------- traduction (les petits modèles ne lisent que l'anglais)
@@ -99,7 +107,8 @@ object LocalImages {
         val t0 = System.currentTimeMillis()
         val img = try {
             LocalImageGenerator.generate(file(m).absolutePath, parts.joinToString(", "), m.negative, width, height, m.steps, m.cfg,
-                threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6))
+                threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6), sampleMethod = m.sampler,
+                weights = if (m.stream) com.localia.imagegen.WeightMode.STREAMING else com.localia.imagegen.WeightMode.STANDARD)
         } finally { done.set(true) }
         NoxLog.p("IMAGE", "Image locale ${m.id} ${img.width}×${img.height} en ${System.currentTimeMillis() - t0} ms (moteur ${LocalImageGenerator.engineVariant}, $free Mo libres avant)")
         return jpeg(img)
@@ -176,6 +185,13 @@ object LocalImages {
         val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL; setPadding(a.dp(4), 0, a.dp(4), a.dp(8)) }
         body.addView(a.text("Dans le chat local, dis « crée une image de… » : Nox dessine sur le téléphone, sans internet. " +
             "Gemma est mis en pause pendant le dessin puis rechargé. Mêmes modèles que Lia.", 13f, Ui.MUTED).apply { setPadding(0, 0, 0, a.dp(10)) })
+        body.addView(android.widget.Switch(a).apply {
+            text = "Agrandir automatiquement en HD (Real-ESRGAN ×4 : 512 → 2048 px, 768 → 3072 px)"
+            setTextColor(Ui.TEXT); textSize = 14.5f
+            isChecked = Nox.prefs.localImageHd
+            setPadding(0, 0, 0, a.dp(10))
+            setOnCheckedChangeListener { _, on -> Nox.prefs.localImageHd = on }
+        })
         MODELS.forEach { m -> body.addView(card(a, m)) }
         NoxDialog.sheet(a).setTitle("Images locales").setView(ScrollView(a).apply { addView(body) }).setNegativeButton("Fermer", null).show()
     }

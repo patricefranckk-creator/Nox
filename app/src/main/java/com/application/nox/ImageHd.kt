@@ -31,12 +31,12 @@ object ImageHd {
     private fun file(u: Upscaler) = File(Nox.store.dir(), "${u.id}.pth")
 
     /** Agrandit [jpeg] ; [stage] reçoit l'étape (téléchargement, agrandissement). Bloquant : à lancer hors du fil principal. */
-    fun enlarge(jpeg: ByteArray, prompt: String, stage: (String) -> Unit): ByteArray {
+    fun enlarge(jpeg: ByteArray, prompt: String, sourceMax: Int = MAX_SOURCE_PIXELS, stage: (String) -> Unit): ByteArray {
         val u = upscalerFor(prompt)
         val model = file(u)
         if (!model.exists() || model.length() < u.mb * 900_000L) download(u, model, stage)
         stage("Agrandissement HD (modèle ${u.label}) : souvent 30 s à 2 min")
-        val source = decode(jpeg)
+        val source = decode(jpeg, sourceMax)
         val t0 = System.currentTimeMillis()
         val out = LocalImageGenerator.upscale(model.absolutePath, source, threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6))
         NoxLog.p("IMAGE", "Agrandissement ${source.width}×${source.height} → ${out.width}×${out.height} en ${System.currentTimeMillis() - t0} ms (${u.id}, moteur ${LocalImageGenerator.engineVariant})")
@@ -71,11 +71,11 @@ object ImageHd {
         }
     }
 
-    private fun decode(jpeg: ByteArray): LocalImage {
+    private fun decode(jpeg: ByteArray, maxPixels: Int): LocalImage {
         val src = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: throw IllegalArgumentException("image illisible")
         val px = src.width.toLong() * src.height
-        val bmp = if (px > MAX_SOURCE_PIXELS) {
-            val k = sqrt(MAX_SOURCE_PIXELS.toDouble() / px)
+        val bmp = if (px > maxPixels) {
+            val k = sqrt(maxPixels.toDouble() / px)
             Bitmap.createScaledBitmap(src, (src.width * k).toInt(), (src.height * k).toInt(), true).also { src.recycle() }
         } else src
         val w = bmp.width; val h = bmp.height
