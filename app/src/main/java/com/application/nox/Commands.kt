@@ -170,12 +170,11 @@ object Commands {
         Regex("^(?:ajoute|ajouter|rajoute|rajouter|mets|mettre|note|noter)\\s+(.+?)\\s+(?:a|sur|dans)\\s+$LIST_NAME$").find(f)?.let { m ->
             val item = m.groups[1]!!.range
             val list = m.groups[2]?.value?.trim().orEmpty().ifEmpty { "courses" }
-            val what = keep(item).replace(Regex("^(?:du |de la |de l'|des |un |une |le |la |les |l')", RegexOption.IGNORE_CASE), "")
-            return Call("notes", JSONObject().put("action", "ajouter").put("liste", list).put("texte", what), "liste")
+            return Call("notes", JSONObject().put("action", "ajouter").put("liste", list).put("texte", items(keep(item))), "liste")
         }
         Regex("^(?:retire|retirer|enleve|enlever|supprime|supprimer|efface|effacer|barre|barrer)\\s+(.+?)\\s+(?:de|du|des)\\s+$LIST_NAME$").find(f)?.let { m ->
             val list = m.groups[2]?.value?.trim().orEmpty().ifEmpty { "courses" }
-            return Call("notes", JSONObject().put("action", "retirer").put("liste", list).put("texte", keep(m.groups[1]!!.range)), "liste")
+            return Call("notes", JSONObject().put("action", "retirer").put("liste", list).put("texte", items(keep(m.groups[1]!!.range))), "liste")
         }
         Regex("^(?:vide|efface|supprime)\\s+$LIST_NAME$").find(f)?.let { m ->
             val list = m.groups[1]?.value?.trim() ?: return null
@@ -187,6 +186,11 @@ object Commands {
         }
         return null
     }
+
+    /** « des tomates et du pain » → « tomates, pain » : sans articles, un élément par virgule. */
+    private fun items(raw: String): String = raw.split(Regex("\\s*[,;]\\s*|\\s+et\\s+"))
+        .map { it.trim().replace(Regex("^(?:du |de la |de l'|des |un |une |le |la |les |l'|d')", RegexOption.IGNORE_CASE), "").trim() }
+        .filter { it.isNotEmpty() }.joinToString(", ")
 
     private fun calc(f: String): Call? {
         val m = Regex("^(?:combien (?:font|fait|ca fait)|calcule|c'est combien|ca fait combien)\\s+(.+)$").find(f) ?: return null

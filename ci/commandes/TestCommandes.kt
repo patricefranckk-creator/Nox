@@ -1,6 +1,12 @@
 package com.application.nox
 
 /** Vérifié à chaque build (CI) : chaque phrase doit déclencher l'outil attendu, ou rester pour le modèle (null). */
+private val TEXTS = mapOf(
+    "Ajoute des tomates et du pain sur ma liste de courses" to "tomates, pain",
+    "Retire le lait de la liste de courses" to "lait",
+    "Rappelle-moi d'appeler Maman à 18h" to "appeler Maman",
+)
+
 fun main() {
     val cases = listOf(
         "Mets un minuteur de 5 minutes" to "horloge", "Nox, minuteur 1 h 30" to "horloge", "minuteur 1h30" to "horloge",
@@ -28,7 +34,7 @@ fun main() {
     var bad = 0
     for ((text, want) in cases) {
         val got = Commands.match(text)
-        val ok = got?.skill == want
+        val ok = got?.skill == want && (text !in TEXTS || got?.args?.optString("texte") == TEXTS[text])
         if (!ok) bad++
         println("${if (ok) "✓" else "✗"} %-58s → %s".format(text, got?.let { "${it.skill} ${it.args}" } ?: "modèle"))
     }
