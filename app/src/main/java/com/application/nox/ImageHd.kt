@@ -38,7 +38,7 @@ object ImageHd {
         stage("Agrandissement HD (modèle ${u.label}) : souvent 30 s à 2 min")
         val source = decode(jpeg, sourceMax)
         val t0 = System.currentTimeMillis()
-        val out = LocalImageGenerator.upscale(model.absolutePath, source, threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6))
+        val out = LocalImageGenerator.upscale(model.absolutePath, source, threads = LocalImages.THREADS)
         NoxLog.p("IMAGE", "Agrandissement ${source.width}×${source.height} → ${out.width}×${out.height} en ${System.currentTimeMillis() - t0} ms (${u.id}, moteur ${LocalImageGenerator.engineVariant})")
         return toJpeg(out)
     }

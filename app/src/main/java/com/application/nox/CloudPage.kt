@@ -232,6 +232,7 @@ class CloudPage(private val a: MainActivity, parent: FrameLayout) {
                     if (a.prefs.autoSpeak && ans.photos.isEmpty() && ans.created.isEmpty()) a.voiceOut.speakAll(ans.text)
                 }.onFailure { t ->
                     val stopped = t.message == "arrêté"
+                    if (!stopped) NoxLog.w("CLOUD", "Demande en ligne échouée : ${t.message}")
                     body.text = if (stopped) "Demande arrêtée." else "⚠ " + (t.message ?: "erreur")
                     body.setTextColor(if (stopped) Ui.FAINT else Ui.DANGER)
                     foot.text = if (stopped) "" else "Touche « API » pour vérifier tes clés"

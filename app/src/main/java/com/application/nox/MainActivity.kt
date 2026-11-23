@@ -778,8 +778,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             prompt = LocalImages.cleanTranslation(sb.toString(), request) ?: request
             NoxLog.i("IMAGE", "Demande traduite pour le dessin (${prompt.length} car.)")
         }
+        LocalImages.awake(true)
         val paused = java.util.concurrent.CountDownLatch(1)
         main.post {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             setMode(NeuronView.State.THINKING, "Je dessine…")
             view.body.text = "Je mets Gemma en pause pour libérer la mémoire…"
             engine.unload { paused.countDown() }
@@ -803,20 +805,34 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             else drawn
         }
         val hdSize = if (prefs.localImageHd && r.isSuccess) "${w * 4}×${h * 4}" else "$w×$h"
-        val uri = r.getOrNull()?.let { bytes -> runCatching { LocalImages.saveToGallery(bytes) }.getOrNull() }
+        r.exceptionOrNull()?.let { NoxLog.e("IMAGE", "Dessin local raté (${m.id})", it) }
+        val saved = r.getOrNull()?.let { bytes -> runCatching { LocalImages.saveToGallery(bytes) } }
+        saved?.exceptionOrNull()?.let { NoxLog.e("IMAGE", "Enregistrement de l'image raté", it) }
+        val uri = saved?.getOrNull()
         val sec = (System.currentTimeMillis() - t0) / 1000
+        LocalImages.awake(false)
+        uri?.let { LocalImages.notifyReady(it, "${m.label} · ${sec / 60} min ${sec % 60} s") }
         main.post {
             main.removeCallbacks(tick)
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             routing = false; lastLibrary = null
             if (uri != null) {
                 view.setImage(uri.toString())
+                // Si l'écran a été recréé pendant le dessin, la nouvelle vue de cette réponse reçoit l'image aussi
+                (Nox.ui ?: this).showImage(view.msg)
                 l.onChunk("Voici ton image, dessinée sur le téléphone sans internet ($hdSize, ${m.label}). Elle est aussi dans ta galerie, dossier Images/Nox.")
                 l.onDone("image locale · ${m.label} · $sec s")
             } else {
-                l.onError("Dessin impossible : ${r.exceptionOrNull()?.message ?: "enregistrement raté"}")
+                l.onError("Dessin impossible : ${r.exceptionOrNull()?.message ?: saved?.exceptionOrNull()?.message ?: "erreur inconnue"}")
             }
             loadModel()   // Gemma revient
         }
+    }
+
+    /** Affiche l'image d'un message dans sa vue actuelle (après une recréation de l'écran). */
+    fun showImage(m: ChatMsg) {
+        val p = m.imagePath ?: return
+        for (i in 0 until list.childCount) (list.getChildAt(i) as? TurnView)?.takeIf { it.msg === m }?.setImage(p)
     }
 
     private fun route(text: String, prior: List<ChatMsg>, view: TurnView, l: LlmEngine.StreamListener) {

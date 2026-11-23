@@ -218,9 +218,19 @@ object Cloud {
         val request = subject.trim().ifBlank { original.trim() }
         val prompt = imagePrompt(request)
         val (w, h) = dimensions(original)
-        val model = modelFor(Api.NVIDIA, keys)
+        var model = modelFor(Api.NVIDIA, keys)
         val img = try { image(prompt, model, keys, w, h) } catch (t: Throwable) {
-            keys.record(Api.NVIDIA.id, 0, t.message); throw if (t is CloudException) t else CloudException("NVIDIA : ${t.message}")
+            val busy = t !is CloudException || Regex("ne répond|n'a pas terminé|HTTP 5|expirée").containsMatchIn(t.message.orEmpty())
+            if (!cancelled && busy && model.contains("flux.1-dev")) {
+                NoxLog.w("CLOUD", "FLUX.1-dev indisponible (${t.message}), nouvel essai avec FLUX.1-schnell")
+                model = "black-forest-labs/flux.1-schnell"
+                stage("FLUX.1-dev ne répond pas : j'essaie FLUX.1-schnell")
+                try { image(prompt, model, keys, w, h) } catch (t2: Throwable) {
+                    keys.record(Api.NVIDIA.id, 0, t2.message); throw if (t2 is CloudException) t2 else CloudException("NVIDIA : ${t2.message}")
+                }
+            } else {
+                keys.record(Api.NVIDIA.id, 0, t.message); throw if (t is CloudException) t else CloudException("NVIDIA : ${t.message}")
+            }
         }
         val ms = System.currentTimeMillis() - t0
         keys.record(Api.NVIDIA.id, ms, null)

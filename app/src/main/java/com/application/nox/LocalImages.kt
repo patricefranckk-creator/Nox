@@ -36,10 +36,10 @@ object LocalImages {
     val MODELS = listOf(
         Model("sdxs-512", "SDXS 512 · rapide",
             "https://huggingface.co/concedo/sdxs-512-tinySDdistilled-GGUF/resolve/main/sdxs-512-tinySDdistilled_Q8_0.gguf?download=true",
-            683, 1, 1f, 1200, "Environ 40 s par image, qualité approximative."),
+            683, 1, 1f, 1200, "Le plus rapide (1 étape) : à privilégier sur ce téléphone."),
         Model("sd-turbo", "SD-Turbo · meilleure qualité",
             "https://huggingface.co/gpustack/stable-diffusion-v2-1-turbo-GGUF/resolve/main/stable-diffusion-v2-1-turbo-Q8_0.gguf?download=true",
-            2400, 4, 1f, 3000, "Quelques minutes par image, nettement plus fidèle."),
+            2400, 4, 1f, 3000, "4 étapes : nettement plus fidèle, mais long sur ce téléphone."),
         Model("realistic-vision-hyper", "Realistic Vision · photo",
             "https://huggingface.co/second-state/Realistic_Vision_V6.0_B1-GGUF/resolve/main/realisticVisionV60B1_v51HyperVAE-Q8_0.gguf?download=true",
             1770, 5, 1.5f, 2500, "Photos et visages réalistes, 1 à 2 minutes par image.",
@@ -53,6 +53,30 @@ object LocalImages {
 
     private val main = Handler(Looper.getMainLooper())
     @Volatile var downloading: String? = null; private set
+
+    /** 4 fils comme Lia : les cœurs rapides ; au-delà, les petits cœurs lents freinent tout le calcul. */
+    const val THREADS = 4
+
+    /** Garde le processeur éveillé pendant un dessin (écran éteint ou Nox en arrière-plan), comme Lia. */
+    private val wake by lazy {
+        Nox.app.getSystemService(android.os.PowerManager::class.java)
+            .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "Nox:image").apply { setReferenceCounted(false) }
+    }
+    fun awake(on: Boolean) = try { if (on) wake.acquire(60 * 60_000L) else if (wake.isHeld) wake.release() } catch (_: Throwable) {}
+
+    /** Image prête : notification (utile si Nox était en arrière-plan), toucher = l'ouvrir. */
+    fun notifyReady(uri: Uri, label: String) {
+        try {
+            val nm = Nox.app.getSystemService(android.app.NotificationManager::class.java)
+            nm.createNotificationChannel(android.app.NotificationChannel("nox_images", "Images créées", android.app.NotificationManager.IMPORTANCE_DEFAULT))
+            val open = android.app.PendingIntent.getActivity(Nox.app, 7, android.content.Intent(android.content.Intent.ACTION_VIEW)
+                .setDataAndType(uri, "image/jpeg").addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+            nm.notify(7301, android.app.Notification.Builder(Nox.app, "nox_images")
+                .setSmallIcon(android.R.drawable.ic_menu_gallery).setContentTitle("Ton image est prête")
+                .setContentText("$label · touche pour l'ouvrir (Images/Nox)").setContentIntent(open).setAutoCancel(true).build())
+        } catch (t: Throwable) { NoxLog.w("IMAGE", "Notification d'image impossible", t) }
+    }
 
     fun file(m: Model) = File(Nox.store.dir(), "${m.id}.gguf")
     fun ready(m: Model) = file(m).let { it.exists() && it.length() > m.mb * 900_000L }
@@ -107,7 +131,7 @@ object LocalImages {
         val t0 = System.currentTimeMillis()
         val img = try {
             LocalImageGenerator.generate(file(m).absolutePath, parts.joinToString(", "), m.negative, width, height, m.steps, m.cfg,
-                threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6), sampleMethod = m.sampler,
+                threads = THREADS, sampleMethod = m.sampler,
                 weights = if (m.stream) com.localia.imagegen.WeightMode.STREAMING else com.localia.imagegen.WeightMode.STANDARD)
         } finally { done.set(true) }
         NoxLog.p("IMAGE", "Image locale ${m.id} ${img.width}×${img.height} en ${System.currentTimeMillis() - t0} ms (moteur ${LocalImageGenerator.engineVariant}, $free Mo libres avant)")
@@ -139,7 +163,8 @@ object LocalImages {
         }
         val r = Nox.app.contentResolver
         val uri = r.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("galerie inaccessible")
-        r.openOutputStream(uri)?.use { it.write(bytes) }
+        (r.openOutputStream(uri) ?: throw IllegalStateException("écriture impossible dans la galerie")).use { it.write(bytes) }
+        NoxLog.i("IMAGE", "Image enregistrée dans Images/Nox (${bytes.size / 1024} Ko) : $uri")
         return uri
     }
 
