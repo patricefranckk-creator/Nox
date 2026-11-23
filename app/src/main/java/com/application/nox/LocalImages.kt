@@ -62,7 +62,9 @@ object LocalImages {
         Nox.app.getSystemService(android.os.PowerManager::class.java)
             .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "Nox:image").apply { setReferenceCounted(false) }
     }
-    fun awake(on: Boolean) = try { if (on) wake.acquire(60 * 60_000L) else if (wake.isHeld) wake.release() } catch (_: Throwable) {}
+    fun awake(on: Boolean) {
+        try { if (on) wake.acquire(60 * 60_000L) else if (wake.isHeld) wake.release() } catch (_: Throwable) {}
+    }
 
     /** Image prête : notification (utile si Nox était en arrière-plan), toucher = l'ouvrir. */
     fun notifyReady(uri: Uri, label: String) {
