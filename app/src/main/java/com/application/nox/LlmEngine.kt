@@ -75,6 +75,9 @@ class LlmEngine(
     private var toolsCapable = false
     private var ctxTokens = 4096
     private var charsInContext = 0
+    /** Taille des extraits (web, bibliothèque, écran) glissés dans le dernier message. */
+    private var heavyChars = 0
+    @Volatile private var lightenPending = false
 
     // ------------------------------------------------------------------ chargement
 
@@ -302,6 +305,20 @@ class LlmEngine(
         return build(false)
     }
 
+    /**
+     * Après une réponse appuyée sur des extraits (web, bibliothèque, écran), refait la conversation en fond
+     * avec le seul texte échangé : les extraits ne restent pas dans la mémoire de travail, les compactages
+     * deviennent rares. La réponse, elle, reste dans l'historique.
+     */
+    fun lighten(history: List<ChatMsg>) {
+        if (!lightenPending || busy || engine == null) return
+        lightenPending = false
+        heavyChars = 0
+        val before = charsInContext
+        val c = NoxLog.chrono()
+        resetConversation(history) { NoxLog.p("MOTEUR", "Extraits retirés de la mémoire de travail : $before → $charsInContext caractères en ${c.ms()} ms") }
+    }
+
     fun resetConversation(history: List<ChatMsg>, done: (() -> Unit)? = null) {
         worker.execute {
             try { conversation?.close() } catch (_: Throwable) {}
@@ -332,6 +349,7 @@ class LlmEngine(
                     NoxLog.i("GEN", "Contexte réduit de ${context.length} à $room caractères (mémoire de travail ${ctxTokens} jetons)")
                     context.take(room).substringBeforeLast('\n').ifBlank { context.take(room) }
                 }
+                heavyChars = ctxText.length
                 val full = ctxText + "\nMessage de l'utilisateur : " + text
                 submitNow(Message.user(full), full.length, null, history, l, "texte")
                 return@execute
@@ -344,6 +362,7 @@ class LlmEngine(
             if (hits.isNotEmpty()) NoxLog.i("RAG", "Injection auto ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
             else NoxLog.d("RAG", "Rien d'assez pertinent ($lastRagMs ms)")
             val ctxBlock = library.contextBlock(hits)
+            heavyChars = ctxBlock.length
             if (hits.isNotEmpty()) { val titles = hits.map { it.chunk.title }; post { l.onContext(titles) } }
             val full = if (ctxBlock.isEmpty()) text else ctxBlock + "\nMessage de l'utilisateur : " + text
             val msg = if (image != null && visionReady)
@@ -360,6 +379,7 @@ class LlmEngine(
         if (busy) return
         busy = true
         lastRagMs = 0; lastRagHits = 0
+        heavyChars = 0
         NoxLog.i("OREILLE", "Message vocal envoyé à Gemma : ${durationMs} ms d'audio en ${wavs.size} clip(s), ${wavs.sumOf { it.size } / 1024} Ko")
         worker.execute {
             // RAG par la voix : la question parlée cherche directement dans la bibliothèque
@@ -370,6 +390,7 @@ class LlmEngine(
             } catch (t: Throwable) { NoxLog.e("RAG", "Recherche vocale", t); emptyList() }
             lastRagMs = ragClock.ms(); lastRagHits = hits.size
             val ctxBlock = library.contextBlock(hits)
+            heavyChars = ctxBlock.length
             if (hits.isNotEmpty()) {
                 NoxLog.i("RAG", "Injection vocale ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
                 val titles = hits.map { it.chunk.title }; post { l.onContext(titles) }
@@ -434,6 +455,7 @@ class LlmEngine(
                             if (list.isNotEmpty()) { NoxLog.d("GEN", "Relances : ${list.joinToString(" | ")}"); post { l.onSuggestions(list) } }
                         }
                         charsInContext += chars
+                        if (heavyChars >= LIGHTEN_MIN) lightenPending = true
                         busy = false
                         library.hold = false
                         val stats = stats(t0, tFirst, chars)
@@ -539,6 +561,8 @@ class LlmEngine(
         private const val USABLE = 0.78
         /** Place gardée pour la réponse (≈ 350 jetons). */
         private const val ANSWER_RESERVE = 1300
+        /** Au-delà de ce volume d'extraits, la conversation est allégée après la réponse. */
+        private const val LIGHTEN_MIN = 500
         /** Estimation de la place prise par la description des outils dans le contexte. */
         private const val SKILLS_PROMPT_CHARS = 2400
         /** Jetons audio par seconde (estimation prudente pour la gestion du contexte). */

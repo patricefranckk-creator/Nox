@@ -373,6 +373,17 @@ class Diagnostic(private val a: MainActivity) {
             if (got == want) ok++ else c.warn("« $m » : commande directe = $got (attendu $want)")
             c.line("${if (got == want) "✓" else "✗"} commande « $m » → ${got ?: "modèle"}")
         }
+        val specials = listOf("Bonjour Nox" to (if (java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) < 12) Intents.BRIEFING else null),
+            "Le point du matin" to Intents.BRIEFING, "Résume mon écran" to Intents.SCREEN_SUMMARY, "Propose-moi une réponse" to Intents.SCREEN_REPLY,
+            "Mode interprète anglais" to Intents.INTERPRETER, "Note : acheter des piles" to Intents.NOTE,
+            "Qu'est-ce que j'ai noté sur les piles ?" to Intents.NOTES_FIND, "Retiens cette page" to Intents.KEEP_PAGE, "Raconte une blague" to null)
+        for ((m, want) in specials) {
+            n++; val got = Intents.detect(m, java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY))?.kind
+            if (got == want) ok++ else c.warn("« $m » : phrase spéciale = $got (attendu $want)")
+            c.line("${if (got == want) "✓" else "✗"} spéciale « $m » → ${got ?: "aucune"}")
+        }
+        c.line("Point du matin : ville ${Nox.prefs.briefCity} · météo ${oui(Nox.prefs.briefWeather)} · agenda ${oui(Nox.prefs.briefAgenda)} · rappels ${oui(Nox.prefs.briefReminders)} (${ReminderReceiver.upcoming().size} à venir) · courses ${oui(Nox.prefs.briefList)} · actus ${oui(Nox.prefs.briefNews)}")
+        c.line("Écran lisible (accessibilité) : ${oui(NoxAccess.instance != null)} · notes vocales : ${Nox.library.sources().count { it.title.startsWith(MainActivity.NOTE_TITLE) }}")
         c.line("Observation : « Tu peux me dire c'est quoi un trou noir ? » → ${Router.isKnowledgeQuestion("Tu peux me dire c'est quoi un trou noir ?")}")
         c.line("Observation : « C'est quoi l'autisme ? » → ${Router.isKnowledgeQuestion("C'est quoi l'autisme ?")}")
         c.line("Réglages : bibliothèque d'abord ${oui(Nox.prefs.ragFirst)} · recherche web ${oui(Nox.prefs.webSearch)} · RAG auto ${oui(Nox.prefs.ragAuto)}")

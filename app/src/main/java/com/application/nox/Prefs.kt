@@ -159,6 +159,36 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("bubble", true)
         set(v) = sp.edit().putBoolean("bubble", v).apply()
 
+    /** Point du matin (« Bonjour Nox ») : rubriques à lire et ville de la météo. */
+    var briefAgenda: Boolean
+        get() = sp.getBoolean("brief_agenda", true)
+        set(v) = sp.edit().putBoolean("brief_agenda", v).apply()
+
+    var briefReminders: Boolean
+        get() = sp.getBoolean("brief_reminders", true)
+        set(v) = sp.edit().putBoolean("brief_reminders", v).apply()
+
+    var briefList: Boolean
+        get() = sp.getBoolean("brief_list", true)
+        set(v) = sp.edit().putBoolean("brief_list", v).apply()
+
+    var briefWeather: Boolean
+        get() = sp.getBoolean("brief_weather", true)
+        set(v) = sp.edit().putBoolean("brief_weather", v).apply()
+
+    var briefNews: Boolean
+        get() = sp.getBoolean("brief_news", true)
+        set(v) = sp.edit().putBoolean("brief_news", v).apply()
+
+    var briefCity: String
+        get() = sp.getString("brief_city", "Pau") ?: "Pau"
+        set(v) = sp.edit().putString("brief_city", v).apply()
+
+    /** Rappels programmés (JSON : [{"at":ms,"t":"texte"}]) pour le point du matin. */
+    var reminders: String
+        get() = sp.getString("reminders", "[]") ?: "[]"
+        set(v) = sp.edit().putString("reminders", v).apply()
+
     /** Le centre des autorisations a déjà été présenté au premier lancement. */
     var permsShown: Boolean
         get() = sp.getBoolean("perms_shown", false)

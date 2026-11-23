@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Nox</string>
     <string name="access_desc">Permet à Nox de lire l\'écran et d\'agir dans tes applications quand tu le lui demandes (ouvrir, toucher, écrire, faire défiler). Tout reste sur ton téléphone ; rien n\'est envoyé sur internet.</string>
+    <string name="widget_label">Parler à Nox</string>
 </resources>

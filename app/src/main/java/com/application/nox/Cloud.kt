@@ -103,6 +103,26 @@ object Cloud {
         throw CloudException("Aucun service n'a répondu.\n" + errors.joinToString("\n"))
     }
 
+    /** Traduction rapide pour le mode interprète (null si aucune IA en ligne n'est disponible). */
+    fun translate(text: String, target: String, keys: CloudKeys): String? {
+        cancelled = false
+        for (api in llmOrder(keys, complex = false)) {
+            val t0 = System.currentTimeMillis()
+            try {
+                val out = chat(api, modelFor(api, keys), keys.key(api.id),
+                    "You are a professional interpreter. Translate the user's message into $target. Keep the tone and meaning, " +
+                        "use natural spoken language. Reply with the translation only, no quotes, no notes.", emptyList(), text)
+                keys.record(api.id, System.currentTimeMillis() - t0, null)
+                NoxLog.p("INTERPRETE", "${api.title} : traduction en ${System.currentTimeMillis() - t0} ms")
+                return out.trim().trim('"', '«', '»', ' ')
+            } catch (t: Throwable) {
+                keys.record(api.id, 0, t.message)
+                NoxLog.w("INTERPRETE", "${api.title} en échec, service suivant : ${t.message}")
+            }
+        }
+        return null
+    }
+
     // ---------------------------------------------------------------- modèles de langage (format OpenAI)
 
     private fun base(api: Api) = when (api) {

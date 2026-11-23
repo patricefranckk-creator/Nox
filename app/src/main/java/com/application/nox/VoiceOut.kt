@@ -112,6 +112,14 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         checkAllDone()
     }
 
+    /** Langue de lecture : la voix française choisie, ou la voix du téléphone pour une autre langue (interprète). */
+    fun setLanguage(tag: String) {
+        if (!ok) return
+        if (tag.startsWith("fr")) { tts.language = Locale.FRANCE; applyVoice(); return }
+        val r = tts.setLanguage(Locale.forLanguageTag(tag))
+        NoxLog.i("VOIX", "Lecture en $tag (${if (r >= TextToSpeech.LANG_AVAILABLE) "voix disponible" else "voix absente, code $r"})")
+    }
+
     /** Lit un texte complet (ex. relire un ancien message). */
     fun speakAll(text: String) {
         stop()

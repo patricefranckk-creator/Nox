@@ -50,6 +50,17 @@ class ReminderReceiver : BroadcastReceiver() {
             val am = ctx.getSystemService(AlarmManager::class.java)
             // Fenêtre d'1 minute : précis sans exiger la permission « alarmes exactes »
             am.setWindow(AlarmManager.RTC_WAKEUP, atMillis, 60_000L, pi)
+            val now = System.currentTimeMillis()
+            val kept = upcoming().filter { it.first > now }.toMutableList()
+            kept += atMillis to text
+            Nox.prefs.reminders = org.json.JSONArray(kept.sortedBy { it.first }.map { org.json.JSONObject().put("at", it.first).put("t", it.second) }).toString()
         }
+
+        /** Rappels encore à venir (heure, texte). */
+        fun upcoming(): List<Pair<Long, String>> = try {
+            val a = org.json.JSONArray(Nox.prefs.reminders)
+            (0 until a.length()).map { a.getJSONObject(it) }.map { it.getLong("at") to it.getString("t") }
+                .filter { it.first > System.currentTimeMillis() }
+        } catch (_: Throwable) { emptyList() }
     }
 }

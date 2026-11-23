@@ -48,9 +48,9 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
 
     private fun intent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fr-FR")
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, language == FRENCH)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, patienceMs.toLong())
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, (patienceMs - 300).coerceAtLeast(800).toLong())
@@ -138,5 +138,11 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
                 else -> listener.onVoiceError("Reconnaissance vocale : erreur $error")
             }
         }
+    }
+
+    companion object {
+        const val FRENCH = "fr-FR"
+        /** Langue écoutée (le mode interprète alterne entre le français et l'autre langue). */
+        @Volatile var language = FRENCH
     }
 }

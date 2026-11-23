@@ -481,6 +481,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     private fun idleHint() = when {
         !engine.ready -> ""
+        interp != null -> "Interprète français ⇄ ${interp?.name} · ${if (interpFromForeign) "j'écoute en ${interp?.name}" else "j'écoute en français"} · dis « stop »"
         prefs.handsFree -> "Mains libres actif · touche le neurone pour parler"
         else -> "Touche le neurone pour parler · appui long : mains libres"
     }
@@ -743,6 +744,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     /** Dernière réponse tirée de la bibliothèque (question + passages), pour « plus de détails ». */
     private var lastLibrary: Pair<String, List<Library.Hit>>? = null
     @Volatile private var routing = false
+    /** Pages lues par la dernière recherche internet (pour « retiens cette page »). */
+    @Volatile private var lastWeb: List<WebSearch.Result> = emptyList()
+    /** Mode interprète : langue étrangère active, et sens de la prochaine phrase. */
+    @Volatile private var interp: Intents.Lang? = null
+    @Volatile private var interpFromForeign = false
 
     /** Aiguillage d'un message écrit : internet, « plus de détails », bibliothèque d'abord, ou le modèle. */
     /**
@@ -840,6 +846,13 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         Thread {
             val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l); refreshAction() } }
             try {
+                val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                interp?.let { lang ->
+                    if (Intents.detect(text, hour, interpreting = true)?.kind == Intents.INTERPRETER_END) direct(l, stopInterpreter(), "interprète")
+                    else interpret(text, lang, l)
+                    return@Thread
+                }
+                Intents.detect(text, hour)?.let { hit -> special(hit, prior, l); return@Thread }
                 // « Crée une image de… » dans le chat local : dessin sur le téléphone, sans internet
                 Cloud.imageRequest(text)?.let { subject -> localImage(text, subject, view, l); return@Thread }
                 val clock = Router.timeAnswer(text)
@@ -867,6 +880,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                     web != null -> {
                         main.post { setMode(NeuronView.State.THINKING, "Recherche sur internet…") }
                         val results = WebSearch.search(web)
+                        lastWeb = results.filter { it.text.isNotBlank() }
                         main.post {
                             routing = false
                             lastLibrary = null
@@ -911,10 +925,148 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         }.start()
     }
 
+    /** Réponse immédiate, sans le modèle (appelé depuis le fil d'aiguillage). */
+    private fun direct(l: LlmEngine.StreamListener, answer: String, label: String) = main.post {
+        routing = false
+        lastLibrary = null
+        l.onChunk(answer)
+        l.onDone(label)
+    }
+
+    /** Phrases spéciales : point du matin, écran, interprète, notes vocales, pages web à retenir. */
+    private fun special(hit: Intents.Hit, prior: List<ChatMsg>, l: LlmEngine.StreamListener) {
+        NoxLog.i("ROUTE", "Phrase spéciale : ${hit.kind}")
+        when (hit.kind) {
+            Intents.BRIEFING -> {
+                main.post { setMode(NeuronView.State.THINKING, "Je prépare ton point du matin…") }
+                direct(l, Briefing.build(prefs.userName), "point du matin")
+            }
+            Intents.SCREEN_SUMMARY, Intents.SCREEN_REPLY -> {
+                val acc = NoxAccess.instance
+                val screen = acc?.readScreen()
+                when {
+                    acc == null -> direct(l, "Pour lire l'écran, active l'accessibilité de Nox (Menu › Accès), puis redemande-moi.", "écran")
+                    screen == null || screen.contains("C'est Nox lui-même") ->
+                        direct(l, "Ouvre l'appli à lire, touche la bulle Nox, puis redis « résume mon écran » ou « propose une réponse ».", "écran")
+                    else -> {
+                        val ask = if (hit.kind == Intents.SCREEN_SUMMARY)
+                            "Résume en quelques phrases ce que montre cet écran : qui parle, de quoi, les informations importantes. Ignore les boutons et les menus."
+                        else "Propose une réponse courte, naturelle et prête à envoyer au dernier message reçu sur cet écran. Donne seulement la réponse, à la première personne."
+                        val content = "Contenu de l'écran du téléphone :\n" + screen.substringBefore("\nÉléments :")
+                        NoxLog.i("ECRAN", "Écran lu pour ${hit.kind} : ${content.length} caractères")
+                        main.post {
+                            routing = false
+                            lastLibrary = null
+                            engine.send(ask, prior, l, null, content)
+                            refreshAction()
+                        }
+                    }
+                }
+            }
+            Intents.INTERPRETER -> {
+                val lang = Intents.lang(hit.arg)
+                main.post { startInterpreter(lang) }
+                direct(l, "Mode interprète français ⇄ ${lang.name} activé. Parle en français : je traduis et je lis en ${lang.name}. " +
+                    "Ensuite j'écoute la réponse en ${lang.name} et je la redis en français. Dis « stop » pour arrêter.", "interprète")
+            }
+            Intents.INTERPRETER_END -> direct(l, "Le mode interprète n'est pas actif.", "interprète")
+            Intents.NOTE -> {
+                val clean = Intents.cleanNote(hit.arg)
+                if (clean.length < 2) direct(l, "Que veux-tu que je note ? Dis par exemple « note : appeler le garage ».", "note")
+                else {
+                    val stamp = java.text.SimpleDateFormat("d MMM yyyy HH'h'mm", java.util.Locale.FRANCE).format(java.util.Date())
+                    val title = "$NOTE_TITLE du $stamp · " + clean.split(' ').take(6).joinToString(" ").trimEnd('.', ',', ';')
+                    library.addDocument(title, clean)
+                    direct(l, "C'est noté : « $clean »", "note vocale")
+                }
+            }
+            Intents.NOTES_FIND -> direct(l, findNotes(hit.arg.trim()), "notes vocales")
+            Intents.KEEP_PAGE -> {
+                val pages = lastWeb.filter { it.text.length > 200 }
+                if (pages.isEmpty()) direct(l, "Fais d'abord une recherche sur internet, puis dis « retiens cette page ».", "bibliothèque")
+                else {
+                    pages.forEach { r -> library.addDocument(r.title.take(90) + " (web)", r.text + "\n\nSource : " + r.url) }
+                    lastWeb = emptyList()
+                    direct(l, "J'ajoute ${pages.size} page${if (pages.size > 1) "s" else ""} à ta bibliothèque : " +
+                        pages.joinToString(" ; ") { it.title.take(60) } + ". Tu pourras m'interroger dessus même sans internet.", "bibliothèque")
+                }
+            }
+            else -> direct(l, "Je n'ai pas compris.", "?")
+        }
+    }
+
+    private fun findNotes(topic: String): String {
+        val all = library.sources().filter { it.title.startsWith(NOTE_TITLE) }
+        if (all.isEmpty()) return "Tu n'as encore aucune note vocale. Dis « note : … » pour en créer une."
+        val found = if (topic.isEmpty()) all.take(8) else {
+            val byText = library.sources(topic).filter { it.title.startsWith(NOTE_TITLE) }.map { it.source }
+            val bySense = library.search(topic, k = 8).map { it.chunk }.filter { it.title.startsWith(NOTE_TITLE) }.map { it.source }
+            (byText + bySense).distinct().mapNotNull { src -> all.firstOrNull { it.source == src } }.take(8)
+        }
+        if (found.isEmpty()) return "Je ne trouve pas de note sur « $topic »."
+        return (if (topic.isEmpty()) "Tes dernières notes :" else "Tes notes sur « $topic » :") + "\n" + found.joinToString("\n") { s ->
+            "• " + s.title.removePrefix("$NOTE_TITLE du ").substringBefore(" · ") + " : " + library.extracts(s.source).joinToString(" ") { it.text }.take(400)
+        }
+    }
+
+    // ------------------------------------------------------------ interprète
+
+    private fun startInterpreter(lang: Intents.Lang) {
+        interp = lang
+        interpFromForeign = false
+        VoiceIn.language = VoiceIn.FRENCH
+        NoxLog.p("INTERPRETE", "Mode interprète français ⇄ ${lang.name}")
+        if (mode == NeuronView.State.IDLE) setMode(NeuronView.State.IDLE, idleHint())
+    }
+
+    private fun stopInterpreter(): String {
+        val lang = interp
+        interp = null
+        VoiceIn.language = VoiceIn.FRENCH
+        main.post { voiceOut.setLanguage(VoiceIn.FRENCH); if (mode == NeuronView.State.IDLE) setMode(NeuronView.State.IDLE, idleHint()) }
+        NoxLog.p("INTERPRETE", "Fin du mode interprète")
+        return "Mode interprète ${lang?.name ?: ""} terminé. Je reparle français."
+    }
+
+    /** Traduit la phrase entendue (en ligne si une IA est enregistrée, sinon Gemma) puis la lit dans l'autre langue. */
+    private fun interpret(text: String, lang: Intents.Lang, l: LlmEngine.StreamListener) {
+        val fromForeign = interpFromForeign
+        val target = if (fromForeign) "French" else lang.english
+        val targetTag = if (fromForeign) VoiceIn.FRENCH else lang.tag
+        main.post { setMode(NeuronView.State.THINKING, "Je traduis…") }
+        val online = try { Cloud.translate(text, target, CloudKeys(this)) } catch (t: Throwable) { NoxLog.w("INTERPRETE", "Traduction en ligne impossible : ${t.message}"); null }
+        val out = online ?: localTranslate(text, target)
+        main.post {
+            voiceOut.setLanguage(targetTag)
+            interpFromForeign = !fromForeign
+            VoiceIn.language = if (interpFromForeign) lang.tag else VoiceIn.FRENCH
+        }
+        if (out.isBlank()) direct(l, "Je n'ai pas réussi à traduire, répète s'il te plaît.", "interprète")
+        else direct(l, out, if (online != null) "interprète en ligne → ${if (fromForeign) "français" else lang.name}" else "interprète Gemma → ${if (fromForeign) "français" else lang.name}")
+    }
+
+    private fun localTranslate(text: String, target: String): String {
+        if (!engine.ready) return ""
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val sb = StringBuilder()
+        main.post {
+            engine.send("Translate into $target. Reply with the translation only, nothing else:\n$text", emptyList(), object : LlmEngine.StreamListener {
+                override fun onChunk(text: String) { sb.append(text) }
+                override fun onDone(stats: String) { latch.countDown() }
+                override fun onError(msg: String) { latch.countDown() }
+            }, context = "")
+        }
+        latch.await(60, java.util.concurrent.TimeUnit.SECONDS)
+        return sb.toString().trim().trim('"', '«', '»', ' ')
+    }
+
+    fun runText(t: String) = send(t)
+
     private fun finishTurn(spoken: Boolean) {
         streamingView = null
         if (Bubble.shown) messages.lastOrNull()?.takeIf { !it.fromUser }?.let { Bubble.say(it.text) }
         chats.save(messages)
+        if (!engine.busy) engine.lighten(messages.toList())
         if (spoken) voiceOut.endStream()
         if (!voiceOut.speaking && !listeningNow) setMode(NeuronView.State.IDLE, idleHint())
         if (!spoken) maybeRelisten()
@@ -922,7 +1074,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     private fun maybeRelisten() {
-        if (prefs.handsFree && turnFromVoice && !isFinishing) main.postDelayed({ if (!engine.busy && !voiceOut.speaking) startListening() }, 350)
+        if ((prefs.handsFree || interp != null) && turnFromVoice && !isFinishing) main.postDelayed({ if (!engine.busy && !voiceOut.speaking) startListening() }, 350)
     }
 
     fun newConversation() {
@@ -1203,6 +1355,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         /** Envoyé par Freekipedia (« Envoyer à Nox ») avec le fichier .db en données. */
         const val ACTION_IMPORT_FREEKIPEDIA = "com.application.nox.IMPORTER_FREEKIPEDIA"
         const val EXTRA_VOICE = "com.application.nox.VOICE"
+        const val NOTE_TITLE = "Note vocale"
         const val REQ_PERM = 13
         const val REQ_PERMS_CENTER = 15
         private const val REQ_MIC = 11

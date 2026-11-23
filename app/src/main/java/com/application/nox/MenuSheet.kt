@@ -30,6 +30,7 @@ class MenuSheet(private val a: MainActivity) {
         Entry("journal", "📈", "Journal") { JournalDialog(a).show() },
         Entry("enligne", "☁", "En ligne") { a.cloudPage.open() },
         Entry("images", "🎨", "Images") { LocalImages.showDialog(a) },
+        Entry("matin", "☀", "Point du matin") { Briefing.showDialog(a) },
         Entry("diagnostic", "🩺", "Diagnostic") { Diagnostic(a).show() },
         Entry("autorisations", "🔐", "Accès") { PermissionsDialog(a).show() },
     )
@@ -58,6 +59,9 @@ class MenuSheet(private val a: MainActivity) {
             Triple("🎙️", "Vocal") { a.openVoicePage(listen = true) },
             Triple("🙌", if (a.prefs.handsFree) "Mains libres · activé" else "Mains libres") { a.toggleHandsFree() },
             Triple("🗣️", "Assistant vocal (bouton Power)") { PermissionsDialog(a).show() },
+            Triple("☀", "Point du matin") { Briefing.showDialog(a) },
+            Triple("🌍", "Mode interprète") { interpreter() },
+            Triple("🗒️", "Mes notes vocales") { a.runText("Mes notes") },
         )
         section(body, "Connaissances",
             Triple("🔎", "Contenu de la bibliothèque") { LibraryExplorer(a).show() },
@@ -134,6 +138,13 @@ class MenuSheet(private val a: MainActivity) {
                 a.prefs.persona = txt.text.toString().trim().ifEmpty { Prefs.DEFAULT_PERSONA }
                 a.applyConversationSettings()
             }.show()
+    }
+
+    private fun interpreter() {
+        val langs = Intents.LANGS
+        NoxDialog.Builder(a).setTitle("Mode interprète").setIcon("🌍")
+            .setItems(langs.map { "Français ⇄ ${it.name}" }.toTypedArray()) { _, w -> a.runText("Mode interprète ${langs[w].name}") }
+            .setNegativeButton("Annuler", null).show()
     }
 
     private fun showLists() {

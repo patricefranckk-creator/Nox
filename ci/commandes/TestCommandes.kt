@@ -39,5 +39,6 @@ fun main() {
         println("${if (ok) "✓" else "✗"} %-58s → %s".format(text, got?.let { "${it.skill} ${it.args}" } ?: "modèle"))
     }
     println("${cases.size - bad}/${cases.size} corrects")
+    bad += testIntents()
     if (bad > 0) kotlin.system.exitProcess(1)
 }
