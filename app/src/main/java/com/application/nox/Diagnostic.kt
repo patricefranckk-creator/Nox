@@ -596,7 +596,9 @@ class Diagnostic(private val a: MainActivity) {
         val perms = info.requestedPermissions.orEmpty()
         var missing = 0
         perms.forEachIndexed { i, p ->
-            val granted = ((info.requestedPermissionsFlags?.getOrNull(i) ?: 0) and PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0
+            // la superposition ne s'accorde pas comme les autres : elle se règle dans « Afficher par-dessus les autres applis »
+            val granted = if (p == android.Manifest.permission.SYSTEM_ALERT_WINDOW) Settings.canDrawOverlays(a)
+                else ((info.requestedPermissionsFlags?.getOrNull(i) ?: 0) and PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0
             if (!granted) missing++
             c.line("${if (granted) "✓" else "✗"} ${p.removePrefix("android.permission.")}")
         }

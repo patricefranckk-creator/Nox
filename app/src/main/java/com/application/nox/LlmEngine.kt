@@ -431,11 +431,12 @@ class LlmEngine(
             var tFirst = 0L
             var chars = 0
             val think = ThinkFilter()
+            val leak = LeakedCallFilter(skills.all.map { it.name }.toSet())
             val suggest = if (prefs.suggestions) SuggestFilter() else null
             try {
                 conv.sendMessageAsync(msg, object : MessageCallback {
                     override fun onMessage(message: Message) {
-                        var chunk = think.feed(message.toString())
+                        var chunk = leak.feed(think.feed(message.toString()))
                         if (transcript != null) {
                             chunk = transcript.feed(chunk)
                             transcript.take()?.let { heard -> post { l.onTranscript(heard) } }
@@ -448,6 +449,18 @@ class LlmEngine(
                     }
 
                     override fun onDone() {
+                        leak.finish()?.let { rest ->
+                            val shown = rest.ifEmpty { "" }
+                            if (shown.isNotEmpty()) { if (tFirst == 0L) tFirst = System.nanoTime(); chars += shown.length; post { l.onChunk(shown) } }
+                        }
+                        leak.call?.let { (name, args) ->
+                            val t = NoxLog.chrono()
+                            val out = try { skills.all.first { it.name == name }.run(args) } catch (e: Throwable) { "Je n'ai pas pu utiliser l'outil $name : ${e.message}" }
+                            NoxLog.w("OUTIL", "Appel d'outil écrit en texte par le modèle, exécuté quand même : $name($args) → ${out.take(80)} · ${t.ms()} ms")
+                            if (tFirst == 0L) tFirst = System.nanoTime()
+                            chars += out.length
+                            post { l.onChunk(out) }
+                        }
                         transcript?.flush()?.let { rest -> if (rest.isNotEmpty()) { chars += rest.length; post { l.onChunk(rest) } } }
                         suggest?.let { sf ->
                             sf.flushVisible().let { rest -> if (rest.isNotEmpty()) { chars += rest.length; post { l.onChunk(rest) } } }
@@ -658,6 +671,50 @@ class ThinkFilter {
             if (text.isNotEmpty()) started = true
         }
         return text
+    }
+}
+
+/**
+ * Rattrape un appel d'outil que le modèle écrit en texte au lieu de l'appeler
+ * (ex. « calculer{expression:<|"|>7 * 8<|"|>} ») : rien n'est affiché, l'outil est exécuté à la fin.
+ */
+class LeakedCallFilter(private val names: Set<String>) {
+    private val head = StringBuilder()
+    private var decided = false
+    private var leaking = false
+    var call: Pair<String, org.json.JSONObject>? = null; private set
+
+    fun feed(chunk: String): String {
+        if (decided && !leaking) return chunk
+        head.append(chunk)
+        if (leaking) return ""
+        val h = head.toString().trimStart().removePrefix("call:")
+        val name = h.takeWhile { it.isLetter() || it == '_' }
+        val stillPossible = name.length == h.length && names.any { it.startsWith(name) }
+        return when {
+            name.length < h.length && h[name.length] == '{' && name in names -> { leaking = true; decided = true; "" }
+            stillPossible && h.length < 24 -> ""
+            else -> { decided = true; head.toString().also { head.setLength(0) } }
+        }
+    }
+
+    /** Fin du flux : texte retenu à afficher (null s'il n'y a rien), et [call] rempli si c'était un appel. */
+    fun finish(): String? {
+        if (!leaking) return if (decided || head.isEmpty()) null else head.toString().also { head.setLength(0) }
+        val h = head.toString().trimStart().removePrefix("call:").replace("<|\"|>", "\"").replace("<tool_call|>", "")
+        val name = h.substringBefore('{')
+        val body = h.substringAfter('{').substringBeforeLast('}')
+        val args = org.json.JSONObject()
+        Regex("(\\w+)\\s*:\\s*(?:\"((?:[^\"\\\\]|\\\\.)*)\"|([^,}]+))").findAll(body).forEach { m ->
+            val k = m.groupValues[1]
+            val str = m.groups[2]?.value
+            if (str != null) args.put(k, str) else {
+                val raw = m.groupValues[3].trim()
+                args.put(k, raw.toLongOrNull() ?: raw.toDoubleOrNull() ?: raw.toBooleanStrictOrNull() ?: raw)
+            }
+        }
+        call = name to args
+        return null
     }
 }
 
