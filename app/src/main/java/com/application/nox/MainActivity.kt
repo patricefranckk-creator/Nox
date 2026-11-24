@@ -725,6 +725,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 statsLine.text = stats
                 if (prefs.rememberChats && stats != "interrompu" && !stats.startsWith(LIBRARY_ANSWER)) library.addExchange(userMsg.text.removePrefix("🎙 ").removePrefix("📷 "), reply.text)
                 finishTurn(speak)
+                if (text != null && image == null) relayIfUnsure(text, reply.text, stats, prior)
             }
 
             override fun onError(msg: String) {
@@ -844,7 +845,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun route(text: String, prior: List<ChatMsg>, view: TurnView, l: LlmEngine.StreamListener) {
         routing = true
         Thread {
-            val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l); refreshAction() } }
+            val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l, hint = Intents.toolHint(text)); refreshAction() } }
             try {
                 val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
                 interp?.let { lang ->
@@ -856,6 +857,17 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 // « Crée une image de… » dans le chat local : dessin sur le téléphone, sans internet
                 Cloud.imageRequest(text)?.let { subject -> localImage(text, subject, view, l); return@Thread }
                 val clock = Router.timeAnswer(text)
+                val chain = if (clock == null && prefs.skillsEnabled) Commands.matchAll(text) else null
+                if (chain != null) {
+                    val t = NoxLog.chrono()
+                    val outs = chain.map { c ->
+                        try { Nox.skills.all.first { it.name == c.skill }.run(c.args) }
+                        catch (e: Throwable) { "${c.label} : impossible (${e.message})" }
+                    }
+                    NoxLog.p("ROUTE", "${chain.size} commandes directes enchaînées en ${t.ms()} ms : ${chain.joinToString(" → ") { it.skill }}")
+                    direct(l, outs.joinToString("\n"), "${chain.size} commandes directes")
+                    return@Thread
+                }
                 val cmd = if (clock == null && prefs.skillsEnabled) Commands.match(text) else null
                 val done = cmd?.let { c ->
                     val t = NoxLog.chrono()
@@ -981,6 +993,28 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                 }
             }
             Intents.NOTES_FIND -> direct(l, findNotes(hit.arg.trim()), "notes vocales")
+            Intents.REMEMBER -> {
+                val fact = hit.arg.trim().trimEnd('.', '!').replaceFirstChar { it.uppercase() }
+                if (fact.length < 3) direct(l, "Que veux-tu que je retienne ?", "mémoire")
+                else {
+                    Nox.skills.memory.add(fact)
+                    engine.refreshPrompt()
+                    NoxLog.i("MEMOIRE", "Souvenir ajouté directement : $fact")
+                    direct(l, "C'est retenu : « $fact ». Je m'en souviendrai dans toutes nos conversations.", "mémoire")
+                }
+            }
+            Intents.FORGET -> {
+                val n = Nox.skills.memory.forget(hit.arg.trim().trimEnd('.', '!'))
+                if (n > 0) engine.refreshPrompt()
+                direct(l, if (n == 0) "Je n'avais rien retenu là-dessus." else "C'est oublié ($n souvenir${if (n > 1) "s" else ""} effacé${if (n > 1) "s" else ""}).", "mémoire")
+            }
+            Intents.ABOUT_ME -> {
+                val facts = Nox.skills.memory.all()
+                val name = prefs.userName.takeIf { it.isNotBlank() }?.let { "Tu t'appelles $it." } ?: ""
+                direct(l, if (facts.isEmpty()) "$name Je n'ai encore rien retenu d'autre. Dis-moi par exemple « retiens que je travaille à l'IME ».".trim()
+                    else "$name Voici ce que je retiens de toi :\n".trimStart() + facts.joinToString("\n") { "• $it" }, "mémoire")
+            }
+            Intents.ASK_ONLINE -> askOnline(hit.arg.ifBlank { prior.lastOrNull { it.fromUser }?.text ?: "" }, prior, l, explicit = true)
             Intents.KEEP_PAGE -> {
                 val pages = lastWeb.filter { it.text.length > 200 }
                 if (pages.isEmpty()) direct(l, "Fais d'abord une recherche sur internet, puis dis « retiens cette page ».", "bibliothèque")
@@ -993,6 +1027,59 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             }
             else -> direct(l, "Je n'ai pas compris.", "?")
         }
+    }
+
+    // ------------------------------------------------------------ relais en ligne
+
+    private fun online(): Boolean = try {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java)
+        cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+    } catch (_: Throwable) { false }
+
+    private fun cloudReady(keys: CloudKeys) = listOf(Cloud.Api.GROQ, Cloud.Api.GEMINI, Cloud.Api.OPENROUTER).any { keys.has(it.id) }
+
+    private fun cloudHistory(prior: List<ChatMsg>) = prior.filter { it.text.isNotBlank() }.takeLast(6)
+        .map { Cloud.Msg(if (it.fromUser) "user" else "assistant", it.text.removePrefix("☁ ")) }
+
+    /** « Demande en ligne : … » : la question part directement vers Groq / Gemini / OpenRouter. */
+    private fun askOnline(question: String, prior: List<ChatMsg>, l: LlmEngine.StreamListener, explicit: Boolean) {
+        val keys = CloudKeys(this)
+        when {
+            question.isBlank() -> direct(l, "Quelle question veux-tu poser en ligne ?", "en ligne")
+            !cloudReady(keys) -> direct(l, "Aucune IA en ligne n'est configurée : ajoute une clé Groq ou Gemini dans la page « En ligne ».", "en ligne")
+            !online() -> direct(l, "Pas de connexion internet pour l'instant.", "en ligne")
+            else -> {
+                main.post { setMode(NeuronView.State.THINKING, "Je demande en ligne…") }
+                val r = try { Cloud.ask(question, cloudHistory(prior), keys, prefs.userName) } catch (t: Throwable) { null }
+                if (r == null || r.text.isBlank()) direct(l, "L'IA en ligne ne répond pas pour l'instant.", "en ligne")
+                else {
+                    NoxLog.p("RELAIS", "${if (explicit) "Demande" else "Relais"} en ligne · ${r.via} · ${r.ms} ms")
+                    direct(l, "☁ " + r.text, "en ligne · ${r.via}")
+                }
+            }
+        }
+    }
+
+    /** Gemma avoue ne pas savoir : si le relais est permis, la même question part en ligne et la réponse s'ajoute. */
+    private fun relayIfUnsure(question: String, answer: String, stats: String, prior: List<ChatMsg>) {
+        if (!prefs.cloudRelay || !stats.contains("tok/s") || !Intents.uncertain(answer)) return
+        val keys = CloudKeys(this)
+        if (!cloudReady(keys) || !online()) return
+        NoxLog.i("RELAIS", "Gemma ne sait pas : la question part en ligne")
+        setMode(NeuronView.State.THINKING, "Gemma ne sait pas, je demande en ligne…")
+        Thread {
+            val r = try { Cloud.ask(question, cloudHistory(prior), keys, prefs.userName) } catch (t: Throwable) { NoxLog.w("RELAIS", "Relais en ligne impossible : ${t.message}"); null }
+            main.post {
+                if (r == null || r.text.isBlank()) { setMode(NeuronView.State.IDLE, idleHint()); return@post }
+                NoxLog.p("RELAIS", "Réponse en ligne ajoutée · ${r.via} · ${r.ms} ms")
+                val m = ChatMsg(false, "☁ " + r.text).apply { voice = prefs.autoSpeak }
+                val v = addTurn(m)
+                v.render(); v.refreshFooter()
+                scrollToEnd()
+                if (prefs.autoSpeak) { stopListening(); voiceOut.speakAll(r.text) } else setMode(NeuronView.State.IDLE, idleHint())
+                if (Bubble.shown) Bubble.say(r.text)
+            }
+        }.start()
     }
 
     private fun findNotes(topic: String): String {
@@ -1061,6 +1148,9 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     fun runText(t: String) = send(t)
+
+    /** Copie de la conversation en cours (banc d'essai : on remet le modèle dans l'état d'avant). */
+    fun history(): List<ChatMsg> = messages.toList()
 
     private fun finishTurn(spoken: Boolean) {
         streamingView = null
@@ -1162,6 +1252,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onLevel(level: Float) { voicePage.setLevel(level); neuron.setLevel(level) }
 
     override fun onPartial(text: String) {
+        library.prefetch(text)
         voicePage.heard(text)
         if (!voicePage.isOpen) statsLine.text = text
     }

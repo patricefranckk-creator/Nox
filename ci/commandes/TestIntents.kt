@@ -16,6 +16,10 @@ fun testIntents(): Int {
         Triple("Retiens cette page", 10, Intents.KEEP_PAGE), Triple("Garde ces pages dans la bibliothèque", 10, Intents.KEEP_PAGE),
         Triple("Quelle note a eu mon fils ?", 10, null), Triple("Raconte-moi une blague", 10, null),
         Triple("Ajoute du lait à la liste de courses", 10, null),
+        Triple("Retiens que je travaille à l'IME de Bizanos", 10, Intents.REMEMBER), Triple("Souviens-toi que ma voiture est grise", 10, Intents.REMEMBER),
+        Triple("Oublie que ma voiture est grise", 10, Intents.FORGET), Triple("Qu'est-ce que tu sais sur moi ?", 10, Intents.ABOUT_ME),
+        Triple("Demande en ligne : qui a gagné le match hier ?", 10, Intents.ASK_ONLINE), Triple("En ligne : explique la blockchain", 10, Intents.ASK_ONLINE),
+        Triple("Rappelle-moi dans 10 minutes d'appeler Paul", 10, null),
     )
     var bad = 0
     for ((text, hour, want) in cases) {
@@ -31,6 +35,20 @@ fun testIntents(): Int {
     val i = Intents.detect("stop", 10, interpreting = true)?.kind
     if (i != Intents.INTERPRETER_END) { bad++; println("✗ arrêt interprète : $i") }
     if (Intents.cleanNote("euh acheter du pain du coup") != "Acheter du pain.") { bad++; println("✗ nettoyage : « ${Intents.cleanNote("euh acheter du pain du coup")} »") }
-    println("Phrases spéciales : ${cases.size + 4 - bad}/${cases.size + 4} correctes")
+    val r = Intents.detect("Retiens que je travaille à l'IME de Bizanos", 10)?.arg
+    if (r != "je travaille à l'IME de Bizanos") { bad++; println("✗ souvenir : « $r »") }
+    val unsure = listOf("Je ne sais pas qui a gagné ce match." to true, "Désolé, je n'ai pas accès à internet pour vérifier." to true,
+        "La capitale de la France est Paris." to false, "Mes connaissances s'arrêtent en 2024." to true)
+    for ((t, want) in unsure) if (Intents.uncertain(t) != want) { bad++; println("✗ incertitude « $t » → ${!want}") }
+    val hints = listOf("Qu'est-ce que j'ai comme rendez-vous jeudi ?" to "agenda", "Envoie un message à Julie pour lui dire que j'arrive" to "contacter",
+        "Raconte-moi une histoire" to null, "Comment aller à Lourdes ?" to "itineraire")
+    for ((t, want) in hints) if (Intents.toolHint(t) != want) { bad++; println("✗ indice d'outil « $t » → ${Intents.toolHint(t)} (attendu $want)") }
+    val chains = listOf("Mets un minuteur de 5 minutes et allume la lampe" to 2, "Ajoute du pain et du lait à la liste de courses" to 0,
+        "Ouvre WhatsApp et écris à Paul" to 0, "Allume la lampe, puis mets le volume à 50" to 2)
+    for ((t, want) in chains) {
+        val n = Commands.matchAll(t)?.size ?: 0
+        if (n != want) { bad++; println("✗ enchaînement « $t » → $n commande(s) (attendu $want)") } else println("✓ enchaînement « $t » → $n")
+    }
+    println("Phrases spéciales : ${cases.size + 4 - bad}/${cases.size + 4} correctes (+ souvenirs, incertitudes, indices, enchaînements)")
     return bad
 }

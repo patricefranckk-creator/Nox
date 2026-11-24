@@ -102,6 +102,34 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         }
     }
 
+    /** Vecteurs des dernières questions : la même question cherchée deux fois (aiguillage puis réponse) n'est calculée qu'une fois. */
+    private val queryCache = object : LinkedHashMap<String, FloatArray>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?) = size > 12
+    }
+    private val prefetcher = Executors.newSingleThreadExecutor { r -> Thread(r, "nox-rag-avance").apply { priority = Thread.NORM_PRIORITY - 1 } }
+    @Volatile private var prefetchWanted = ""
+
+    private fun queryVector(q: String): FloatArray? {
+        val key = q.trim().lowercase()
+        synchronized(queryCache) { queryCache[key] }?.let { NoxLog.d("RAG", "Vecteur de la question déjà prêt (calculé pendant que tu parlais)"); return it }
+        val v = embed(q, query = true) ?: return null
+        synchronized(queryCache) { queryCache[key] = v }
+        return v
+    }
+
+    /** Pendant que tu parles : on vectorise déjà le texte reconnu, la recherche finale sera plus rapide. */
+    fun prefetch(partial: String) {
+        val q = partial.trim()
+        if (!semantic || q.length < 8 || q == prefetchWanted) return
+        prefetchWanted = q
+        prefetcher.execute {
+            if (prefetchWanted != q) return@execute
+            val key = q.lowercase()
+            if (synchronized(queryCache) { queryCache.containsKey(key) }) return@execute
+            embed(q, query = true)?.let { v -> synchronized(queryCache) { queryCache[key] = v } }
+        }
+    }
+
     private fun embed(text: String, query: Boolean): FloatArray? {
         val e = embedder ?: return null
         val prefix = if (query) QUERY_PREFIX else DOC_PREFIX
@@ -366,7 +394,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
         // --- Sens (cosinus)
         val cos = HashMap<Long, Double>()
-        val qv = if (semantic) embed(q, query = true) else null
+        val qv = if (semantic) queryVector(q) else null
         if (qv != null) for (c in pool) {
             val v = c.vec ?: continue
             if (v.size != qv.size) continue

@@ -111,6 +111,16 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putBoolean("rag_first", v).apply()
 
     /** « cherche sur internet… » : recherche web puis réponse écrite par Nox. */
+    /** Scores du banc d'essai (JSON), pour comparer les versions. */
+    var benchHistory: String
+        get() = sp.getString("bench_history", "[]") ?: "[]"
+        set(v) = sp.edit().putString("bench_history", v).apply()
+
+    /** Si Gemma ne sait pas, la question part vers une IA en ligne (Groq, Gemini…) quand une clé est enregistrée. */
+    var cloudRelay: Boolean
+        get() = sp.getBoolean("cloud_relay", false)
+        set(v) = sp.edit().putBoolean("cloud_relay", v).apply()
+
     var webSearch: Boolean
         get() = sp.getBoolean("web_search", true)
         set(v) = sp.edit().putBoolean("web_search", v).apply()

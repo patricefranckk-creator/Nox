@@ -231,7 +231,7 @@ class LlmEngine(
     /** Snapdragon 6 Gen 4 : 1 + 4 cœurs performants. On laisse les petits cœurs au système et à la voix. */
     private fun bigCores(): Int = (Runtime.getRuntime().availableProcessors() - 3).coerceIn(2, 6)
 
-    private fun systemPrompt(withSkills: Boolean): String {
+    private fun systemPrompt(withSkills: Boolean, recap: String = ""): String {
         val now = SimpleDateFormat("EEEE d MMMM yyyy, HH:mm", Locale.FRANCE).format(Date())
         val sb = StringBuilder(prefs.persona.trim())
         sb.append("\n\nNous sommes le ").append(now).append('.')
@@ -250,7 +250,22 @@ class LlmEngine(
                 .append("(5 mots maximum), séparées par |, que ton interlocuteur pourrait te dire ensuite. Exemple : >> Raconte-m'en plus | Et demain ?")
         }
         sb.append(skills.memory.promptBlock())
+        if (recap.isNotEmpty()) sb.append("\n\nPlus tôt dans cette conversation (résumé) :\n").append(recap)
         return sb.toString()
+    }
+
+    /** Résumé sans le modèle : chaque question, et la première phrase de chaque réponse. */
+    private fun recap(older: List<ChatMsg>, max: Int): String {
+        if (older.isEmpty() || max < 120) return ""
+        val lines = older.map { m ->
+            val t = m.text.replace(Regex("\\s+"), " ").trim()
+            if (m.fromUser) "- Toi : " + t.take(120)
+            else "- Nox : " + (Regex("^.{20,160}?[.!?](?=\\s|$)").find(t)?.value ?: t.take(140))
+        }
+        val out = ArrayList<String>()
+        var n = 0
+        for (l in lines.asReversed()) { if (n + l.length + 1 > max) break; out.add(0, l); n += l.length + 1 }
+        return out.joinToString("\n")
     }
 
     /** Consigne + outils : la part fixe de la mémoire de travail. */
@@ -266,19 +281,23 @@ class LlmEngine(
         val budgetChars = minOf((ctxTokens * CHARS_PER_TOKEN * 0.40).toInt(), roomAfterCompaction() - reserve).coerceAtLeast(0)
         val kept = ArrayList<ChatMsg>()
         var used = 0
-        for (m in history.asReversed()) {
-            if (m.text.isBlank()) continue
-            if (used + m.text.length > budgetChars) break
+        val usable = history.filter { it.text.isNotBlank() }
+        for (m in usable.asReversed()) {
+            if (kept.size >= FULL_MESSAGES || used + m.text.length > budgetChars) break
             kept.add(0, m); used += m.text.length
         }
         while (kept.isNotEmpty() && !kept.first().fromUser) kept.removeAt(0)
+        // Les échanges plus anciens ne repartent pas en entier : un court résumé (questions + 1re phrase des réponses)
+        val older = usable.take(usable.size - kept.size).takeLast(RECAP_MESSAGES)
+        val recap = recap(older, (budgetChars - used).coerceIn(0, RECAP_CHARS))
+        if (recap.isNotEmpty()) NoxLog.d("MOTEUR", "Résumé des ${older.size} messages plus anciens : ${recap.length} caractères au lieu de ${older.sumOf { it.text.length }}")
         val initial = kept.map { if (it.fromUser) Message.user(it.text) else Message.model(it.text) }
         val sampler = SamplerConfig(topK = 40, topP = 0.95, temperature = prefs.temperature.toDouble())
 
         skills.conversationStart = kept.firstOrNull()?.time ?: System.currentTimeMillis()
 
         fun build(withSkills: Boolean): Conversation {
-            val sys = systemPrompt(withSkills)
+            val sys = systemPrompt(withSkills, recap)
             charsInContext = used + sys.length + if (withSkills) SKILLS_PROMPT_CHARS else 0
             return e.createConversation(
                 ConversationConfig(
@@ -311,13 +330,18 @@ class LlmEngine(
      * deviennent rares. La réponse, elle, reste dans l'historique.
      */
     fun lighten(history: List<ChatMsg>) {
-        if (!lightenPending || busy || engine == null) return
+        val full = charsInContext > ctxTokens * CHARS_PER_TOKEN * USABLE * EARLY_COMPACT
+        if ((!lightenPending && !full) || busy || engine == null) return
+        if (full && !lightenPending) NoxLog.i("MOTEUR", "Mémoire de travail bien remplie : compactage d'avance, pendant que tu lis")
         lightenPending = false
         heavyChars = 0
         val before = charsInContext
         val c = NoxLog.chrono()
         resetConversation(history) { NoxLog.p("MOTEUR", "Extraits retirés de la mémoire de travail : $before → $charsInContext caractères en ${c.ms()} ms") }
     }
+
+    /** La consigne a changé (souvenir ajouté ou oublié) : la conversation sera refaite en fond après la réponse. */
+    fun refreshPrompt() { lightenPending = true }
 
     fun resetConversation(history: List<ChatMsg>, done: (() -> Unit)? = null) {
         worker.execute {
@@ -337,7 +361,7 @@ class LlmEngine(
      * pertinents existent, ils sont glissés devant le message — Gemma répond avec, sans appel d'outil.
      */
     fun send(text: String, history: List<ChatMsg>, l: StreamListener, image: ByteArray? = null,
-             context: String? = null, contextTitles: List<String>? = null) {
+             context: String? = null, contextTitles: List<String>? = null, hint: String? = null) {
         if (busy) return
         busy = true
         worker.execute {
@@ -364,7 +388,9 @@ class LlmEngine(
             val ctxBlock = library.contextBlock(hits)
             heavyChars = ctxBlock.length
             if (hits.isNotEmpty()) { val titles = hits.map { it.chunk.title }; post { l.onContext(titles) } }
-            val full = if (ctxBlock.isEmpty()) text else ctxBlock + "\nMessage de l'utilisateur : " + text
+            val asked = if (hint != null && skillsActive) "$text\n(outil adapté : « $hint »)" else text
+            if (hint != null && skillsActive) NoxLog.d("GEN", "Indice d'outil : $hint")
+            val full = if (ctxBlock.isEmpty()) asked else ctxBlock + "\nMessage de l'utilisateur : " + asked
             val msg = if (image != null && visionReady)
                 Message.user(Contents.of(Content.ImageBytes(image), Content.Text(full.ifBlank { "Décris cette image." })))
             else Message.user(full)
@@ -576,6 +602,12 @@ class LlmEngine(
         private const val ANSWER_RESERVE = 1300
         /** Au-delà de ce volume d'extraits, la conversation est allégée après la réponse. */
         private const val LIGHTEN_MIN = 500
+        /** Au-delà de cette part de la mémoire utile, compactage d'avance entre deux tours. */
+        private const val EARLY_COMPACT = 0.62
+        /** Derniers messages repris mot pour mot ; les précédents sont résumés. */
+        private const val FULL_MESSAGES = 6
+        private const val RECAP_MESSAGES = 16
+        private const val RECAP_CHARS = 1100
         /** Estimation de la place prise par la description des outils dans le contexte. */
         private const val SKILLS_PROMPT_CHARS = 2400
         /** Jetons audio par seconde (estimation prudente pour la gestion du contexte). */

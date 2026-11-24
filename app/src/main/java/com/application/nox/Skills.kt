@@ -383,16 +383,30 @@ class Skills(private val ctx: Context, private val library: Library) {
                 return try {
                     val r = s.run(JSONObject(paramsJsonString.ifBlank { "{}" }))
                     NoxLog.i("OUTIL", "${s.name}($paramsJsonString) → ${r.replace('\n', ' ').take(160)} · ${c.ms()} ms")
-                    r
+                    if (FAILED.containsMatchIn(r)) retryAdvice(s.name, r) else r
                 } catch (t: Throwable) {
                     NoxLog.e("OUTIL", "${s.name}($paramsJsonString) a échoué en ${c.ms()} ms", t)
-                    "Échec : ${t.message ?: t.javaClass.simpleName}"
+                    retryAdvice(s.name, "Échec : ${t.message ?: t.javaClass.simpleName}")
                 }
             }
         })
     }
 
     // ================================================================ aides
+
+    private val FAILED = Regex("^(?:Échec|Erreur|Impossible|Je ne trouve|Aucun contact|Ce champ refuse)|introuvable", RegexOption.IGNORE_CASE)
+    private val retried = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Outil raté : une seule deuxième chance par outil et par tour, avec une consigne claire au modèle. */
+    private fun retryAdvice(name: String, result: String): String {
+        val now = System.currentTimeMillis()
+        val last = retried[name] ?: 0L
+        return if (now - last > 60_000 && callsThisTurn.get() <= 3) {
+            retried[name] = now
+            NoxLog.i("OUTIL", "$name : deuxième chance proposée au modèle")
+            "$result\nVérifie les paramètres (nom exact, date, heure, orthographe) et rappelle l'outil une seule fois en les corrigeant. Si ce n'est pas possible, explique le problème en une phrase."
+        } else "$result\nN'essaie plus : explique simplement le problème en une phrase."
+    }
 
     private fun used(label: String) { main.post { onUsed?.invoke(label) } }
 

@@ -63,7 +63,9 @@ class SettingsDialog(private val a: MainActivity) {
         val ragFirst = switch("Répondre d'abord depuis la bibliothèque (sans solliciter le modèle)", p.ragFirst)
         body.addView(ragFirst)
         val web = switch("Recherche sur internet (« cherche sur le net… »)", p.webSearch)
+        val relay = switch("Relais en ligne : si Gemma ne sait pas, demander à Groq / Gemini (☁)", p.cloudRelay)
         body.addView(web)
+        body.addView(relay)
 
         // ---------------- Voix
         body.addView(a.sectionTitle("Voix"))
@@ -161,6 +163,7 @@ class SettingsDialog(private val a: MainActivity) {
             p.temperature = temp.progress / 100f
             p.ragFirst = ragFirst.isChecked
             p.webSearch = web.isChecked
+            p.cloudRelay = relay.isChecked
             p.autoSpeak = autoSpeak.isChecked
             p.handsFree = handsFree.isChecked
             commitVoice()

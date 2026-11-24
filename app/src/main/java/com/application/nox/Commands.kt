@@ -76,6 +76,19 @@ object Commands {
     private val MULTI = Regex("\\b(?:et|puis|ensuite|apres|avant|pour lui|pour elle|a qui|a quelqu'un)\\b")
 
     /** Commande directe reconnue, ou null pour laisser le modèle répondre. */
+    private val CHAIN = Regex("\\s*(?:,\\s*)?\\b(?:et puis|et ensuite|et aussi|puis|ensuite|et)\\b\\s*", RegexOption.IGNORE_CASE)
+
+    /**
+     * Plusieurs commandes dans une phrase (« mets un minuteur de 5 minutes et allume la lampe ») :
+     * la liste n'est rendue que si CHAQUE morceau est une commande directe, sinon null.
+     */
+    fun matchAll(message: String): List<Call>? {
+        val parts = message.trim().split(CHAIN).map { it.trim().trim(',', '.', ' ') }.filter { it.isNotEmpty() }
+        if (parts.size < 2 || parts.size > 4) return null
+        val calls = parts.map { match(it) ?: return null }
+        return calls
+    }
+
     fun match(message: String): Call? {
         val original = message.trim()
         val f0 = Text.fold(original).replace('’', '\'').replace(Regex("\\s+"), " ")
