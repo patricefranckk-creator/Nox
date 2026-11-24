@@ -59,15 +59,14 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
                 main.post {
                     checkVolume()
                     setSpeaking(true)
-                    if (text != null) FaceBrain.sentence(text)
+                    if (text != null) FaceBrain.sentence(text, prefs.speechRate)
                 }
             }
 
             override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
                 val text = id?.let { texts[it] } ?: return
                 if (start < 0 || end > text.length || start >= end) return
-                val w = text.substring(start, end)
-                main.post { FaceBrain.word(w, prefs.speechRate) }
+                main.post { FaceBrain.word(text, start, prefs.speechRate) }
             }
 
             override fun onDone(id: String?) {

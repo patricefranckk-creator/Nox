@@ -678,8 +678,17 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     /** Un tour de parole complet : tour utilisateur → réflexion → réponse en flux (+ voix). */
     private fun runTurn(text: String?, wav: List<ByteArray>?, ms: Long, image: ByteArray? = null) {
-        if (!engine.ready) { toast(if (Nox.loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"); return }
-        if (engine.busy || routing) return
+        if (!engine.ready) {
+            val m = if (Nox.loading) "Nox se réveille, un instant…" else "Aucun modèle chargé"
+            NoxLog.w("TOUR", "Tour ignoré : $m")
+            voicePage.notice("⚠ $m"); toast(m); return
+        }
+        if (engine.busy || routing) {
+            NoxLog.w("TOUR", "Tour ignoré : moteur occupé (busy=${engine.busy}, routing=$routing, voix=${wav != null})")
+            voicePage.notice("⚠ Je termine encore la réponse précédente · réessaie dans un instant")
+            if (!engine.busy) setMode(NeuronView.State.IDLE, idleHint())
+            return
+        }
         stopListening()
         voiceOut.stop()
 

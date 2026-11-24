@@ -177,10 +177,11 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             targets.clear()
             val st = b.state
             // bouche : visèmes des mots prononcés, sinon bouche d'expression
-            if (st == NeuronView.State.SPEAKING && b.viseme.isNotEmpty()) {
+            if (st == NeuronView.State.SPEAKING) {
                 val v = "bouche_" + b.viseme
                 when {
-                    has(v) -> targets[v] = 1f
+                    b.viseme == "REPOS" && has("bouche_repos") -> targets["bouche_repos"] = 1f
+                    b.viseme.isNotEmpty() && has(v) -> targets[v] = 1f
                     (b.viseme == "MBP" || b.viseme == "FV") && has("bouche_MBP") -> targets["bouche_MBP"] = if (b.viseme == "MBP") 1f else 0.7f
                     else -> {
                         val a = ((b.mouthOpen - 0.12f) / 0.75f).coerceIn(0f, 1f)
@@ -190,7 +191,6 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                 }
             } else {
                 val (name, w, alt) = when {
-                    st == NeuronView.State.SPEAKING -> Triple("bouche_repos", 0.8f, null)
                     st == NeuronView.State.THINKING -> Triple("bouche_reflexion", 1f, "bouche_repos")
                     st == NeuronView.State.OFF -> Triple("bouche_repos", 0.6f, null)
                     b.emotion == Emotion.JOIE -> Triple("bouche_sourire", 1f, null)

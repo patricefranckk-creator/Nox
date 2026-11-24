@@ -48,17 +48,47 @@ object FaceBrain {
 
     fun setLevel(v: Float) { level = v.coerceIn(0f, 1f) }
 
-    /** La voix commence une phrase : émotion de la phrase. */
-    @Synchronized fun sentence(text: String) {
+    /**
+     * La voix commence une phrase : émotion de la phrase, et toute la suite des formes de bouche est
+     * planifiée d'avance (certaines voix n'annoncent jamais les mots prononcés).
+     */
+    @Synchronized fun sentence(text: String, rate: Float) {
         emotion = Emotion.of(text)
         talking = true
+        plan(text, rate)
     }
 
-    /** La voix prononce ce mot maintenant : formes de bouche (visèmes du français), son par son. */
-    @Synchronized fun word(w: String, rate: Float) {
+    /** La voix annonce le mot qui commence à [start] : on recale la bouche sur la suite de la phrase. */
+    @Synchronized fun word(text: String, start: Int, rate: Float) {
         lastWordAt = SystemClock.uptimeMillis()
-        val f = Text.fold(w.lowercase())
+        plan(text.substring(start.coerceIn(0, text.length)), rate)
+    }
+
+    private fun plan(text: String, rate: Float) {
         val unit = 85f / rate.coerceIn(0.5f, 2f)
+        val out = ArrayList<Shape>()
+        val word = StringBuilder()
+        fun flush() { if (word.isNotEmpty()) { out.addAll(shapesOf(word.toString(), unit)); word.setLength(0) } }
+        for (c in text) {
+            when {
+                c.isLetter() -> word.append(c)
+                c == '\'' || c == '’' || c == '-' -> flush()
+                c in ".!?…:;" -> { flush(); out += Shape("REPOS", 0.03f, 1f, unit * 4f) }
+                c == ',' -> { flush(); out += Shape("REPOS", 0.04f, 1f, unit * 2.4f) }
+                c.isWhitespace() -> { flush(); if (out.isNotEmpty() && out.last().id != "REPOS") out += Shape("REPOS", 0.08f, 1f, unit * 0.45f) }
+                c.isDigit() -> { flush(); out += Shape("A", 0.6f, 1f, unit); out += Shape("LTDN", 0.25f, 1f, unit * 0.5f) }
+                else -> flush()
+            }
+        }
+        flush()
+        shapes.clear()
+        shapes.addAll(out)
+        shapeLeft = 0f
+    }
+
+    /** Formes de bouche d'un mot (visèmes du français), son par son. */
+    private fun shapesOf(w: String, unit: Float): List<Shape> {
+        val f = Text.fold(w.lowercase())
         var i = 0
         val out = ArrayList<Shape>()
         while (i < f.length) {
@@ -94,9 +124,7 @@ object FaceBrain {
             }
         }
         if (out.isEmpty()) out += Shape("A", 0.4f, 1f, unit)
-        shapes.clear()
-        shapes.addAll(out)
-        shapeLeft = 0f
+        return out
     }
 
     /** La voix s'est tue (fin de phrase ou interruption). */
