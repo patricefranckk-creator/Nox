@@ -51,7 +51,7 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
                 val text = id?.let { texts[it] }
                 main.post {
                     setSpeaking(true)
-                    if (text != null) FaceView.current?.sentence(text)
+                    if (text != null) FaceBrain.sentence(text)
                 }
             }
 
@@ -59,12 +59,12 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
                 val text = id?.let { texts[it] } ?: return
                 if (start < 0 || end > text.length || start >= end) return
                 val w = text.substring(start, end)
-                main.post { FaceView.current?.word(w, prefs.speechRate) }
+                main.post { FaceBrain.word(w, prefs.speechRate) }
             }
 
             override fun onDone(id: String?) {
                 id?.let { texts.remove(it) }
-                main.post { FaceView.current?.silent(); utteranceFinished() }
+                main.post { FaceBrain.silent(); utteranceFinished() }
             }
 
             @Deprecated("Deprecated in Java")
@@ -146,7 +146,7 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         buffer.setLength(0)
         pending = 0
         texts.clear()
-        FaceView.current?.silent()
+        FaceBrain.silent()
         if (ok) tts.stop()
         setSpeaking(false)
     }

@@ -1,0 +1,5 @@
+canonical_face_model.obj
+Maillage du visage canonique de MediaPipe (Face Geometry), Google LLC.
+Source : https://github.com/google-ai-edge/mediapipe/tree/master/mediapipe/modules/face_geometry/data
+Licence : Apache License 2.0 — https://www.apache.org/licenses/LICENSE-2.0
+Utilisé sans modification ; les déformations (bouche, yeux, sourcils) sont calculées par Nox à l'exécution.

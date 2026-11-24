@@ -111,10 +111,10 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putBoolean("rag_first", v).apply()
 
     /** « cherche sur internet… » : recherche web puis réponse écrite par Nox. */
-    /** Page vocale : visage holographique (vrai) ou neurone (faux). */
-    var faceLook: Boolean
-        get() = sp.getBoolean("face_look", true)
-        set(v) = sp.edit().putBoolean("face_look", v).apply()
+    /** Apparence de la page vocale : « avatar3d », « visage » (2,5D) ou « neurone ». */
+    var look: String
+        get() = sp.getString("look", null) ?: if (sp.getBoolean("face_look", true)) "avatar3d" else "neurone"
+        set(v) = sp.edit().putString("look", v).apply()
 
     /** Scores du banc d'essai (JSON), pour comparer les versions. */
     var benchHistory: String

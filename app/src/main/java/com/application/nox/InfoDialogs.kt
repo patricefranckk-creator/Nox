@@ -247,7 +247,7 @@ object AboutDialog {
         b.addView(a.text("Tout tourne sur ce téléphone : modèle, voix, mémoire, bibliothèque, journal. Internet ne sert qu'à télécharger les modèles (et aux recherches web que tu demandes explicitement).", 13f, Ui.TEXT))
 
         b.addView(a.sectionTitle("Crédits").apply { layoutParams = LinearLayout.LayoutParams(-1, -2) })
-        b.addView(a.text("Gemma 4 et EmbeddingGemma 2 © Google DeepMind (Apache 2.0) · LiteRT-LM © Google (Apache 2.0) · Construit avec Claude.", 12.5f, Ui.MUTED))
+        b.addView(a.text("Gemma 4 et EmbeddingGemma 2 © Google DeepMind (Apache 2.0) · LiteRT-LM © Google (Apache 2.0) · Visage 3D : maillage canonique MediaPipe © Google (Apache 2.0) · Construit avec Claude.", 12.5f, Ui.MUTED))
 
         NoxDialog.Builder(a).setTitle("À propos").setIcon("ⓘ").setView(ScrollView(a).apply { addView(b) }).setPositiveButton("OK", null).show()
     }
