@@ -35,6 +35,16 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         background = Ui.rounded(0xFF101A2E.toInt(), a.dp(22).toFloat())
         setPadding(a.dp(4), a.dp(4), a.dp(4), a.dp(4))
     }
+    /** Sous-titres : ce que Nox a compris, puis sa réponse, ou un message s'il n'a rien entendu. */
+    private val subtitle = TextView(a).apply {
+        gravity = Gravity.CENTER
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        setLineSpacing(0f, 1.25f)
+        maxLines = 4
+        ellipsize = android.text.TextUtils.TruncateAt.START
+        setPadding(a.dp(24), 0, a.dp(24), 0)
+        accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+    }
     private val lookNeuron = lookButton("Neurone")
     private val lookFace = lookButton("Visage")
     private val look3d = lookButton("3D")
@@ -62,6 +72,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         page.addView(avatar, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
         looks.addView(lookNeuron); looks.addView(lookFace); looks.addView(look3d)
         page.addView(looks, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = a.dp(36) })
+        page.addView(subtitle, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = a.dp(36 + 52 + 18) })
         lookNeuron.setOnClickListener { setLook("neurone") }
         lookFace.setOnClickListener { setLook("visage") }
         look3d.setOnClickListener { setLook("avatar3d") }
@@ -138,7 +149,25 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         neuron.contentDescription = "Nox : $text"; face.contentDescription = "Nox : $text"; avatar.contentDescription = "Nox : $text"
     }
 
-    fun heard(text: String) {}
+    /** Ce que la reconnaissance vocale entend (en direct), puis la phrase comprise. */
+    fun heard(text: String, final: Boolean = false) {
+        if (text.isBlank()) return
+        subtitle.setTextColor(if (final) 0xFFE8F4FF.toInt() else 0xFF9FB7D6.toInt())
+        subtitle.text = "« ${text.trim()} »"
+    }
+
+    /** La réponse de Nox, au fil de l'eau (fin de la réponse si elle est longue). */
+    fun answer(text: String) {
+        if (!isOpen) return
+        subtitle.setTextColor(0xFFBFE6FF.toInt())
+        subtitle.text = text.replace(Regex("[*#`_]"), "").replace(Regex("\\s+"), " ").trim()
+    }
+
+    /** Message court : rien entendu, erreur de micro, erreur du modèle. */
+    fun notice(text: String) {
+        subtitle.setTextColor(0xFFF2B36B.toInt())
+        subtitle.text = text
+    }
 
     fun setLevel(v: Float) { neuron.setLevel(v); FaceBrain.setLevel(v) }
 

@@ -73,7 +73,8 @@ class FaceMesh(ctx: Context) {
         val p = b.cur
         val open = b.mouthOpen.coerceIn(0f, 1.1f)
         val round = (1f - b.mouthWidth).coerceIn(-0.2f, 0.4f)
-        val eyeOpen = (p.eye * b.blinkK).coerceIn(0f, 1.4f)
+        // au repos les yeux sont un peu plus ouverts que le masque d'origine (regard plus présent)
+        val eyeOpen = ((p.eye + 0.28f) * b.blinkK).coerceIn(0f, 1.7f)
         val browLift = -p.brow * 0.075f
         val arch = (p.arch - 6f) * 0.05f
         for (i in 0 until count) {

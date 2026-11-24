@@ -693,7 +693,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         streamingView = view
         scrollToEnd()
         setMode(NeuronView.State.THINKING, if (wav != null) "Gemma écoute ta voix…" else "Réflexion…")
-        if (text != null) voicePage.heard(text)
+        if (text != null) voicePage.heard(text, final = true)
         statsLine.text = ""
 
         val speak = prefs.autoSpeak
@@ -703,6 +703,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             override fun onChunk(text: String) {
                 reply.text += text
                 view.render()
+                voicePage.answer(reply.text)
                 if (speak) voiceOut.feed(text)
                 if (scroll.getChildAt(0).bottom - (scroll.height + scroll.scrollY) < dp(140)) scrollToEnd()
             }
@@ -729,6 +730,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             }
 
             override fun onError(msg: String) {
+                voicePage.notice("⚠ $msg")
                 reply.text = if (reply.text.isBlank()) "⚠ $msg" else reply.text + "\n\n⚠ $msg"
                 view.render(); view.refreshFooter()
                 finishTurn(speak)
@@ -1258,12 +1260,15 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     override fun onFinal(text: String) {
+        NoxLog.i("OREILLE", "Compris : « $text »")
+        voicePage.heard(text, final = true)
         voicePage.setLevel(0f)
         turnFromVoice = true
         send(text)
     }
 
     override fun onNothing() {
+        if (listeningNow || voicePage.isOpen) voicePage.notice("Je n'ai rien entendu · touche le visage pour réessayer")
         voicePage.setLevel(0f)
         neuron.setLevel(0f)
         if (!engine.busy) setMode(NeuronView.State.IDLE, idleHint())
@@ -1271,6 +1276,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     override fun onVoiceError(msg: String) {
         onNothing()
+        voicePage.notice("⚠ $msg")
         toast(msg)
     }
 

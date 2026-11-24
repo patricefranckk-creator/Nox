@@ -21,15 +21,15 @@ import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import kotlin.math.PI
 import kotlin.math.cos
-import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * L'avatar 3D de Nox : un vrai visage en relief (maillage MediaPipe déformé par [FaceMesh]) rendu en
- * hologramme avec OpenGL ES 3 : surface translucide éclairée par les bords, maillage lumineux, points
- * qui scintillent, balayage, crâne, cou et épaules en fil de lumière. La tête tourne et s'incline
- * vraiment. Son propre fil de rendu, 30 images/s, 15 en cas de chauffe, arrêt quand il est caché.
+ * L'avatar 3D de Nox, en hologramme (OpenGL ES 3) : un vrai visage en relief (maillage MediaPipe déformé
+ * par [FaceMesh]), un crâne et des oreilles en volume, un cou et un buste reliés, des yeux en globes
+ * lumineux qui suivent le regard, et des particules qui montent au repos, tournent autour de la tête
+ * quand il réfléchit et pulsent quand il parle. Surfaces éclairées par les bords, maillage lumineux,
+ * balayage. Son propre fil de rendu : 30 images/s, 15 en cas de chauffe, arrêt quand il est caché.
  * Si OpenGL ES 3 manque, [onFail] est appelé et la page vocale repasse au visage 2,5D.
  */
 class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureListener {
@@ -84,6 +84,69 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         renderer?.paused = visibility != VISIBLE || !isShown
     }
 
+    // ================================================================== volumes fixes
+
+    /** Une surface fixe (crâne, oreille, buste, globe oculaire) : positions, normales, triangles, arêtes à tracer. */
+    private class Solid(val pos: FloatArray, val nor: FloatArray, val tris: ShortArray, val edges: ShortArray) {
+        val vbo = IntArray(4)
+    }
+
+    /** Ellipsoïde en latitude-longitude ; [keep] choisit les points gardés (un triangle est gardé si ses 3 points le sont). */
+    private fun ellipsoid(cx: Float, cy: Float, cz: Float, rx: Float, ry: Float, rz: Float, lat: Int, lon: Int,
+                          edgeEvery: Int, keep: (Float, Float, Float) -> Boolean): Solid {
+        val pos = ArrayList<Float>(); val nor = ArrayList<Float>(); val ok = ArrayList<Boolean>()
+        for (i in 0..lat) {
+            val th = (PI * i / lat).toFloat()
+            for (j in 0..lon) {
+                val ph = (2 * PI * j / lon).toFloat()
+                val nx = sin(th) * cos(ph); val ny = cos(th); val nz = sin(th) * sin(ph)
+                val x = cx + rx * nx; val y = cy + ry * ny; val z = cz + rz * nz
+                pos += x; pos += y; pos += z
+                val gx = nx / rx; val gy = ny / ry; val gz = nz / rz
+                val l = sqrt(gx * gx + gy * gy + gz * gz).coerceAtLeast(1e-6f)
+                nor += gx / l; nor += gy / l; nor += gz / l
+                ok += keep(x, y, z)
+            }
+        }
+        val tris = ArrayList<Short>(); val edges = ArrayList<Short>()
+        fun id(i: Int, j: Int) = i * (lon + 1) + j
+        for (i in 0 until lat) for (j in 0 until lon) {
+            val a = id(i, j); val b = id(i + 1, j); val c = id(i + 1, j + 1); val d = id(i, j + 1)
+            if (ok[a] && ok[b] && ok[c]) { tris += a.toShort(); tris += b.toShort(); tris += c.toShort() }
+            if (ok[a] && ok[c] && ok[d]) { tris += a.toShort(); tris += c.toShort(); tris += d.toShort() }
+            if (i % edgeEvery == 0 && ok[a] && ok[d]) { edges += a.toShort(); edges += d.toShort() }
+            if (j % edgeEvery == 0 && ok[a] && ok[b]) { edges += a.toShort(); edges += b.toShort() }
+        }
+        return Solid(pos.toFloatArray(), nor.toFloatArray(), tris.toShortArray(), edges.toShortArray())
+    }
+
+    /** Cou et buste : anneaux elliptiques (y, demi-largeur, demi-profondeur, profondeur du centre) reliés. */
+    private fun bust(): Solid {
+        val rings = listOf(
+            floatArrayOf(-6.5f, 4.0f, 3.3f, 0.2f), floatArrayOf(-10f, 4.1f, 3.4f, 0.2f), floatArrayOf(-13.2f, 4.5f, 3.7f, 0.1f),
+            floatArrayOf(-14.6f, 7.5f, 4.6f, -0.2f), floatArrayOf(-15.6f, 12f, 5.4f, -0.5f), floatArrayOf(-17f, 15.2f, 5.9f, -0.8f),
+            floatArrayOf(-19.5f, 17f, 6.2f, -0.9f), floatArrayOf(-24f, 18f, 6.4f, -1f),
+        )
+        val seg = 44
+        val pos = ArrayList<Float>(); val nor = ArrayList<Float>()
+        for (r in rings) for (j in 0..seg) {
+            val a = (2 * PI * j / seg).toFloat()
+            pos += r[1] * cos(a); pos += r[0]; pos += r[3] + r[2] * sin(a)
+            val gx = cos(a) / r[1]; val gz = sin(a) / r[2]
+            val l = sqrt(gx * gx + gz * gz)
+            nor += gx / l; nor += 0f; nor += gz / l
+        }
+        val tris = ArrayList<Short>(); val edges = ArrayList<Short>()
+        fun id(i: Int, j: Int) = (i * (seg + 1) + j).toShort()
+        for (i in 0 until rings.size - 1) for (j in 0 until seg) {
+            tris += id(i, j); tris += id(i + 1, j); tris += id(i + 1, j + 1)
+            tris += id(i, j); tris += id(i + 1, j + 1); tris += id(i, j + 1)
+            edges += id(i, j); edges += id(i, j + 1)
+            if (j % 4 == 0) { edges += id(i, j); edges += id(i + 1, j) }
+        }
+        return Solid(pos.toFloatArray(), nor.toFloatArray(), tris.toShortArray(), edges.toShortArray())
+    }
+
     // ================================================================== rendu
 
     private inner class Renderer(private val st: SurfaceTexture, private val mesh: FaceMesh) : Thread("nox-avatar-3d") {
@@ -98,21 +161,37 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
         private var surfProg = 0
         private var lineProg = 0
-        private val vbo = IntArray(6)
+        private val vbo = IntArray(7)
         private lateinit var posBuf: FloatBuffer
         private lateinit var norBuf: FloatBuffer
-        private var headLines = 0
+        private lateinit var partBuf: FloatBuffer
         private var bodyLines = 0
         private val circleN = 32
+
+        // crâne (derrière et au-dessus du masque), oreilles, buste, globes oculaires
+        private val skull = ellipsoid(0f, 0.4f, -0.6f, 7.95f, 9.95f, 7.6f, 26, 40, 2) { _, y, z -> z < 2.2f || y > 7.6f }
+        private val earL = ellipsoid(-7.75f, 1.2f, -0.4f, 0.9f, 2.5f, 1.7f, 10, 16, 3) { x, _, _ -> x < -7.3f }
+        private val earR = ellipsoid(7.75f, 1.2f, -0.4f, 0.9f, 2.5f, 1.7f, 10, 16, 3) { x, _, _ -> x > 7.3f }
+        private val torso = bust()
+        private val eyeball = ellipsoid(0f, 0f, 0f, 1f, 1f, 1f, 12, 18, 3) { _, _, _ -> true }
+        private val solids = listOf(skull, earL, earR, torso, eyeball)
+
+        // particules : x, y, z, vitesse, phase
+        private val parts = 72
+        private val pdata = FloatArray(parts * 5)
+        private val ppos = FloatArray(parts * 3)
 
         private val proj = FloatArray(16)
         private val view = FloatArray(16)
         private val body = FloatArray(16)
         private val head = FloatArray(16)
-        private val tmp = FloatArray(16)
         private val mvHead = FloatArray(16)
         private val mvpHead = FloatArray(16)
+        private val mvBody = FloatArray(16)
         private val mvpBody = FloatArray(16)
+        private val eyeM = FloatArray(16)
+        private val mvEye = FloatArray(16)
+        private val mvpEye = FloatArray(16)
 
         override fun run() {
             try {
@@ -130,6 +209,7 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                     last = now
                     FaceBrain.step(dt)
                     synchronized(FaceBrain) { mesh.update(FaceBrain) }
+                    particles(dt)
                     draw(hot)
                     EGL14.eglSwapBuffers(display, surface)
                     val spent = SystemClock.uptimeMillis() - now
@@ -179,9 +259,10 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         private fun setup() {
             surfProg = program(SURF_VS, SURF_FS)
             lineProg = program(LINE_VS, LINE_FS)
-            GLES30.glGenBuffers(6, vbo, 0)
+            GLES30.glGenBuffers(vbo.size, vbo, 0)
             posBuf = floats(mesh.count * 3)
             norBuf = floats(mesh.count * 3)
+            partBuf = floats(parts * 3)
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[0])
             GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, mesh.count * 12, null, GLES30.GL_DYNAMIC_DRAW)
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[1])
@@ -191,12 +272,10 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, vbo[3])
             GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, mesh.edges.size * 2, shorts(mesh.edges), GLES30.GL_STATIC_DRAW)
 
-            val (hl, bl) = staticLines()
-            headLines = hl.size / 3
-            bodyLines = bl.size / 3
-            val all = hl + bl
+            val lines = bodyCircuits()
+            bodyLines = lines.size / 3
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[4])
-            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, all.size * 4, floats(all), GLES30.GL_STATIC_DRAW)
+            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, lines.size * 4, floats(lines), GLES30.GL_STATIC_DRAW)
 
             val circle = FloatArray((circleN + 2) * 3)
             for (i in 0..circleN) {
@@ -205,55 +284,72 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             }
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[5])
             GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, circle.size * 4, floats(circle), GLES30.GL_STATIC_DRAW)
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[6])
+            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, parts * 12, null, GLES30.GL_DYNAMIC_DRAW)
+
+            for (s in solids) {
+                GLES30.glGenBuffers(4, s.vbo, 0)
+                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, s.vbo[0])
+                GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, s.pos.size * 4, floats(s.pos), GLES30.GL_STATIC_DRAW)
+                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, s.vbo[1])
+                GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, s.nor.size * 4, floats(s.nor), GLES30.GL_STATIC_DRAW)
+                GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, s.vbo[2])
+                GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, s.tris.size * 2, shorts(s.tris), GLES30.GL_STATIC_DRAW)
+                GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, s.vbo[3])
+                GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, s.edges.size * 2, shorts(s.edges), GLES30.GL_STATIC_DRAW)
+            }
+
+            for (i in 0 until parts) respawn(i, Math.random().toFloat())
             GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             GLES30.glDisable(GLES30.GL_CULL_FACE)
             GLES30.glEnable(GLES30.GL_BLEND)
         }
 
-        /** Crâne (suit la tête), cou et épaules (suivent le corps), en segments de lumière. */
-        private fun staticLines(): Pair<FloatArray, FloatArray> {
-            val headL = ArrayList<Float>()
-            val bodyL = ArrayList<Float>()
-            fun seg(l: ArrayList<Float>, a: FloatArray, b: FloatArray) { a.forEach { l += it }; b.forEach { l += it } }
-            val rx = 7.9f; val ry = 10.2f; val rz = 7.4f; val cy = 0.2f; val cz = 0.6f
-            for (y in floatArrayOf(-5.5f, -2.5f, 0.5f, 3.5f, 6.5f, 8.8f)) {
-                val s = sqrt(max(0f, 1f - ((y - cy) / ry) * ((y - cy) / ry)))
-                var prev: FloatArray? = null
-                for (k in 0..24) {
-                    val a = (PI + k * PI / 24).toFloat()
-                    val p = floatArrayOf(rx * s * cos(a), y, cz + rz * s * sin(a))
-                    prev?.let { seg(headL, it, p) }
-                    prev = p
-                }
-            }
-            for (phi in floatArrayOf(200f, 235f, 270f, 305f, 340f)) {
-                val a = Math.toRadians(phi.toDouble()).toFloat()
-                var prev: FloatArray? = null
-                for (k in 0..30) {
-                    val t = (-PI / 2 * 0.82 + k * PI * 0.9 / 30).toFloat()
-                    val p = floatArrayOf(rx * cos(t) * cos(a), cy + ry * sin(t), cz + rz * cos(t) * sin(a))
-                    prev?.let { seg(headL, it, p) }
-                    prev = p
-                }
-            }
+        /** Circuits lumineux sur le buste : clavicules et lignes de données. */
+        private fun bodyCircuits(): FloatArray {
+            val l = ArrayList<Float>()
+            fun seg(vararg p: Float) { p.forEach { l += it } }
             for (sx in floatArrayOf(-1f, 1f)) {
-                seg(bodyL, floatArrayOf(sx * 5.0f, -7.5f, 1.2f), floatArrayOf(sx * 4.4f, -13.5f, 0.6f))
-                val pts = listOf(floatArrayOf(sx * 4.4f, -13.5f, 0.6f), floatArrayOf(sx * 9.5f, -15.4f, 0f), floatArrayOf(sx * 15.5f, -17.2f, -1f), floatArrayOf(sx * 19f, -21f, -1.5f))
-                for (i in 0 until pts.size - 1) seg(bodyL, pts[i], pts[i + 1])
-                val low = pts.map { floatArrayOf(it[0] * 0.94f, it[1] - 1.8f, it[2] + 0.6f) }
-                for (i in 0 until low.size - 1) seg(bodyL, low[i], low[i + 1])
-                seg(bodyL, floatArrayOf(sx * 1.2f, -15.6f, 3f), floatArrayOf(sx * 8.5f, -15.9f, 1.8f))
+                seg(sx * 1.2f, -15.4f, 3.2f, sx * 6f, -15.2f, 3.6f)
+                seg(sx * 6f, -15.2f, 3.6f, sx * 11f, -16.1f, 3.4f)
+                seg(sx * 2.4f, -17.5f, 5.0f, sx * 2.4f, -21.5f, 5.3f)
+                seg(sx * 2.4f, -21.5f, 5.3f, sx * 5.5f, -23f, 5.3f)
+                seg(sx * 8.5f, -18f, 4.8f, sx * 8.5f, -22f, 5.0f)
             }
-            for (y in floatArrayOf(-9.8f, -12.6f)) {
-                var prev: FloatArray? = null
-                for (k in 0..32) {
-                    val a = (k * 2 * PI / 32).toFloat()
-                    val p = floatArrayOf(4.5f * cos(a), y, 0.8f + 3.6f * sin(a))
-                    prev?.let { seg(bodyL, it, p) }
-                    prev = p
+            return l.toFloatArray()
+        }
+
+        // ------------------------------------------------------------ particules
+
+        private fun respawn(i: Int, life: Float) {
+            val a = (Math.random() * 2 * PI).toFloat()
+            val r = 9f + (Math.random() * 9).toFloat()
+            pdata[i * 5] = cos(a) * r
+            pdata[i * 5 + 1] = -22f + life * 38f
+            pdata[i * 5 + 2] = sin(a) * r * 0.5f - 2f
+            pdata[i * 5 + 3] = 0.8f + (Math.random() * 1.6).toFloat()
+            pdata[i * 5 + 4] = (Math.random() * 2 * PI).toFloat()
+        }
+
+        private fun particles(dt: Float) {
+            val b = FaceBrain
+            val thinking = b.state == NeuronView.State.THINKING
+            for (i in 0 until parts) {
+                val k = i * 5
+                if (thinking) {
+                    pdata[k + 4] += dt * (0.9f + pdata[k + 3] * 0.3f)
+                    val r = 10.5f + (i % 3) * 1.2f
+                    ppos[i * 3] = cos(pdata[k + 4]) * r
+                    ppos[i * 3 + 1] = 9.5f + sin(pdata[k + 4] * 2f + i) * 0.8f + (i % 4) * 0.6f
+                    ppos[i * 3 + 2] = sin(pdata[k + 4]) * r * 0.45f
+                } else {
+                    pdata[k + 1] += dt * pdata[k + 3] * (if (b.state == NeuronView.State.SPEAKING) 2.2f else 1f)
+                    if (pdata[k + 1] > 16f) respawn(i, 0f)
+                    ppos[i * 3] = pdata[k] + sin(b.t * 0.8f + pdata[k + 4]) * 0.6f
+                    ppos[i * 3 + 1] = pdata[k + 1]
+                    ppos[i * 3 + 2] = pdata[k + 2]
                 }
             }
-            return headL.toFloatArray() to bodyL.toFloatArray()
         }
 
         // ------------------------------------------------------------ image
@@ -267,10 +363,11 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
             val sleeping = b.state == NeuronView.State.OFF
             val alpha = if (sleeping) 0.55f else 1f
-            Matrix.perspectiveM(proj, 0, 30f, w.toFloat() / h, 10f, 200f)
-            Matrix.setLookAtM(view, 0, 0f, -4.5f, 66f, 0f, -4.5f, 0f, 0f, 1f, 0f)
+            Matrix.perspectiveM(proj, 0, 32f, w.toFloat() / h, 10f, 200f)
+            Matrix.setLookAtM(view, 0, 0f, -4f, 66f, 0f, -5f, 0f, 0f, 1f, 0f)
             Matrix.setIdentityM(body, 0)
             Matrix.translateM(body, 0, 0f, b.breath * 0.07f, 0f)
+            Matrix.scaleM(body, 0, 1f + b.breath * 0.002f, 1f, 1f + b.breath * 0.004f)
             System.arraycopy(body, 0, head, 0, 16)
             Matrix.translateM(head, 0, 0f, -7f + b.nod * 0.05f, 0f)
             Matrix.rotateM(head, 0, b.gx * 1.8f + sin(b.t * 0.45f) * 2.5f, 0f, 1f, 0f)
@@ -279,8 +376,8 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             Matrix.translateM(head, 0, 0f, 7f, 0f)
             Matrix.multiplyMM(mvHead, 0, view, 0, head, 0)
             Matrix.multiplyMM(mvpHead, 0, proj, 0, mvHead, 0)
-            Matrix.multiplyMM(tmp, 0, view, 0, body, 0)
-            Matrix.multiplyMM(mvpBody, 0, proj, 0, tmp, 0)
+            Matrix.multiplyMM(mvBody, 0, view, 0, body, 0)
+            Matrix.multiplyMM(mvpBody, 0, proj, 0, mvBody, 0)
 
             posBuf.clear(); posBuf.put(mesh.pos).flip()
             norBuf.clear(); norBuf.put(mesh.nor).flip()
@@ -289,76 +386,124 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[1])
             GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, mesh.count * 12, norBuf)
 
-            val scan = 10f - ((b.t / 5.5f) % 1f) * 32f
+            val scan = 11f - ((b.t / 6f) % 1f) * 36f
             val speakGlow = if (b.state == NeuronView.State.SPEAKING) b.mouthOpen * 0.25f else 0f
             val listenGlow = if (b.state == NeuronView.State.LISTENING) b.levelS * 0.3f else 0f
+            val glow = (1f + speakGlow + listenGlow) * alpha
 
-            // fond des yeux et de la bouche (sombre, mélange normal)
+            // intérieur sombre de la bouche (mélange normal)
             GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-            for (e in 0..1) circle(mvpHead, FaceMesh.EYES[e * 3], FaceMesh.EYES[e * 3 + 1], 3.0f, 1.35f, 1.1f, 0.02f, 0.05f, 0.1f, 0.92f * alpha, scan)
-            circle(mvpHead, 0f, -4.45f - b.mouthOpen * 0.7f, 4.1f, 2.1f, 0.25f + b.mouthOpen * 0.85f, 0.01f, 0.03f, 0.07f, 0.9f * alpha, scan)
+            flat(mvpHead, 0f, -4.45f - b.mouthOpen * 0.7f, 4.1f, 2.1f, 0.25f + b.mouthOpen * 0.85f, 0.01f, 0.03f, 0.07f, 0.9f * alpha)
 
-            // hologramme : surface, maillage, points (mélange additif)
+            // tout le reste en lumière (mélange additif)
             GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+
+            // buste et cou
+            solid(torso, mvpBody, mvBody, 0.24f, 0.86f, 0.59f, 0.75f * alpha, scan, 0.20f * alpha)
+            lines(mvpBody, 0.24f, 0.86f, 0.59f, 0.5f * alpha, scan)
+            attrib(vbo[4], 0)
+            GLES30.glDrawArrays(GLES30.GL_LINES, 0, bodyLines)
+
+            // crâne et oreilles
+            solid(skull, mvpHead, mvHead, 0.31f, 0.65f, 1f, 0.85f * glow, scan, 0.13f * alpha)
+            solid(earL, mvpHead, mvHead, 0.31f, 0.65f, 1f, 0.8f * glow, scan, 0.16f * alpha)
+            solid(earR, mvpHead, mvHead, 0.31f, 0.65f, 1f, 0.8f * glow, scan, 0.16f * alpha)
+
+            // globes oculaires, derrière les paupières
+            for (e in 0..1) {
+                System.arraycopy(head, 0, eyeM, 0, 16)
+                Matrix.translateM(eyeM, 0, FaceMesh.EYES[e * 3], FaceMesh.EYES[e * 3 + 1], 2.55f)
+                Matrix.rotateM(eyeM, 0, b.gx * 2.5f, 0f, 1f, 0f)
+                Matrix.rotateM(eyeM, 0, -b.gy * 2.5f, 1f, 0f, 0f)
+                Matrix.scaleM(eyeM, 0, 1.25f, 1.25f, 1.25f)
+                Matrix.multiplyMM(mvEye, 0, view, 0, eyeM, 0)
+                Matrix.multiplyMM(mvpEye, 0, proj, 0, mvEye, 0)
+                solid(eyeball, mvpEye, mvEye, 0.5f, 0.85f, 1f, 0.9f * alpha, -1000f, 0f)
+            }
+
+            // visage : surface, maillage, points
             GLES30.glUseProgram(surfProg)
             uMat(surfProg, "uMvp", mvpHead); uMat(surfProg, "uMv", mvHead)
             u3(surfProg, "uColor", 0.31f, 0.65f, 1f)
-            u1(surfProg, "uAlpha", (0.9f + speakGlow + listenGlow) * alpha)
+            u1(surfProg, "uAlpha", glow)
             u1(surfProg, "uScan", scan)
             attrib(vbo[0], 0); attrib(vbo[1], 1)
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, vbo[2])
             GLES30.glDrawElements(GLES30.GL_TRIANGLES, mesh.triangles.size, GLES30.GL_UNSIGNED_SHORT, 0)
             GLES30.glDisableVertexAttribArray(1)
 
-            line(mvpHead, 0.30f, 0.62f, 1f, (0.32f + speakGlow) * alpha, scan, 0f, 0f, 0f, 1f)
+            lines(mvpHead, 0.30f, 0.62f, 1f, (0.26f + speakGlow) * alpha, scan)
             attrib(vbo[0], 0)
             GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, vbo[3])
             GLES30.glDrawElements(GLES30.GL_LINES, mesh.edges.size, GLES30.GL_UNSIGNED_SHORT, 0)
 
             if (!hot) {
-                val pulse = 0.35f + 0.25f * (0.5f + 0.5f * sin(b.t * 2.2f))
-                line(mvpHead, 0.24f, 0.86f, 0.59f, pulse * alpha, scan, 0f, 0f, 0f, 1f, point = 2.2f * density)
+                val pulse = 0.3f + 0.25f * (0.5f + 0.5f * sin(b.t * 2.2f))
+                lines(mvpHead, 0.24f, 0.86f, 0.59f, pulse * alpha, scan, point = 2.0f * density)
                 attrib(vbo[0], 0)
                 GLES30.glDrawArrays(GLES30.GL_POINTS, 0, mesh.count)
+
+                partBuf.clear(); partBuf.put(ppos).flip()
+                GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[6])
+                GLES30.glBufferSubData(GLES30.GL_ARRAY_BUFFER, 0, parts * 12, partBuf)
+                val pa = when (b.state) { NeuronView.State.THINKING -> 0.9f; NeuronView.State.SPEAKING -> 0.45f + b.mouthOpen * 0.5f; else -> 0.35f }
+                lines(mvpBody, 0.5f, 0.85f, 1f, pa * alpha, -1000f, point = 3.2f * density)
+                attrib(vbo[6], 0)
+                GLES30.glDrawArrays(GLES30.GL_POINTS, 0, parts)
             }
 
-            // crâne, cou, épaules
-            line(mvpHead, 0.31f, 0.65f, 1f, 0.22f * alpha, scan, 0f, 0f, 0f, 1f)
-            attrib(vbo[4], 0)
-            GLES30.glDrawArrays(GLES30.GL_LINES, 0, headLines)
-            line(mvpBody, 0.24f, 0.86f, 0.59f, 0.55f * alpha, scan, 0f, 0f, 0f, 1f)
-            attrib(vbo[4], 0)
-            GLES30.glDrawArrays(GLES30.GL_LINES, headLines, bodyLines)
-
-            // iris et pupilles, guidés par le regard
-            if (b.blinkK * b.cur.eye > 0.35f) {
+            // iris, pupille et lueur des yeux, guidés par le regard
+            if (b.blinkK * (b.cur.eye + 0.28f) > 0.4f) {
                 val (r, g, bl) = when (b.emotion) {
                     Emotion.JOIE -> Triple(0.24f, 0.86f, 0.59f)
                     Emotion.EMPATHIE, Emotion.SURPRISE -> Triple(0.5f, 0.85f, 1f)
                     else -> Triple(0.31f, 0.65f, 1f)
                 }
                 for (e in 0..1) {
-                    val ex = FaceMesh.EYES[e * 3] + b.gx * 0.07f
-                    val ey = FaceMesh.EYES[e * 3 + 1] + b.gy * 0.05f
-                    circle(mvpHead, ex, ey, 3.55f, 0.5f, 0.5f, r, g, bl, 0.95f * alpha, scan)
-                    circle(mvpHead, ex, ey, 3.6f, 0.2f, 0.2f, 0.9f, 0.97f, 1f, alpha, scan)
+                    val ex = FaceMesh.EYES[e * 3] + b.gx * 0.08f
+                    val ey = FaceMesh.EYES[e * 3 + 1] + b.gy * 0.06f
+                    flat(mvpHead, ex, ey, 3.7f, 0.62f, 0.62f, r, g, bl, 0.9f * alpha)
+                    flat(mvpHead, ex, ey, 3.75f, 0.26f, 0.26f, 0.85f, 0.97f, 1f, alpha)
+                    if (!hot) {
+                        lines(mvpHead, r, g, bl, 0.35f * alpha, -1000f, point = 26f * density, ox = ex, oy = ey, oz = 3.8f)
+                        attrib(vbo[5], 0)
+                        GLES30.glDrawArrays(GLES30.GL_POINTS, 0, 1)
+                    }
                 }
             }
         }
 
-        private fun circle(mvp: FloatArray, x: Float, y: Float, z: Float, sx: Float, sy: Float, r: Float, g: Float, b: Float, a: Float, scan: Float) {
-            line(mvp, r, g, b, a, scan, x, y, z, 1f, sx = sx, sy = sy, flat = true)
+        private fun solid(s: Solid, mvp: FloatArray, mv: FloatArray, r: Float, g: Float, b: Float, a: Float, scan: Float, edgeA: Float) {
+            GLES30.glUseProgram(surfProg)
+            uMat(surfProg, "uMvp", mvp); uMat(surfProg, "uMv", mv)
+            u3(surfProg, "uColor", r, g, b)
+            u1(surfProg, "uAlpha", a)
+            u1(surfProg, "uScan", scan)
+            attrib(s.vbo[0], 0); attrib(s.vbo[1], 1)
+            GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, s.vbo[2])
+            GLES30.glDrawElements(GLES30.GL_TRIANGLES, s.tris.size, GLES30.GL_UNSIGNED_SHORT, 0)
+            GLES30.glDisableVertexAttribArray(1)
+            if (edgeA > 0f && s.edges.isNotEmpty()) {
+                lines(mvp, r, g, b, edgeA, scan)
+                attrib(s.vbo[0], 0)
+                GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, s.vbo[3])
+                GLES30.glDrawElements(GLES30.GL_LINES, s.edges.size, GLES30.GL_UNSIGNED_SHORT, 0)
+            }
+        }
+
+        private fun flat(mvp: FloatArray, x: Float, y: Float, z: Float, sx: Float, sy: Float, r: Float, g: Float, b: Float, a: Float) {
+            lines(mvp, r, g, b, a, -1000f, ox = x, oy = y, oz = z, sx = sx, sy = sy)
             attrib(vbo[5], 0)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_FAN, 0, circleN + 2)
         }
 
-        private fun line(mvp: FloatArray, r: Float, g: Float, b: Float, a: Float, scan: Float,
-                         ox: Float, oy: Float, oz: Float, scale: Float, point: Float = 0f, sx: Float = scale, sy: Float = scale, flat: Boolean = false) {
+        private fun lines(mvp: FloatArray, r: Float, g: Float, b: Float, a: Float, scan: Float, point: Float = 0f,
+                          ox: Float = 0f, oy: Float = 0f, oz: Float = 0f, sx: Float = 1f, sy: Float = 1f) {
             GLES30.glUseProgram(lineProg)
             uMat(lineProg, "uMvp", mvp)
             u3(lineProg, "uColor", r, g, b)
             u1(lineProg, "uAlpha", a)
-            u1(lineProg, "uScan", if (flat) -1000f else scan)
+            u1(lineProg, "uScan", scan)
             u3(lineProg, "uOffset", ox, oy, oz)
             u3(lineProg, "uScale", sx, sy, 1f)
             u1(lineProg, "uPoint", point)
@@ -404,7 +549,10 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
     companion object {
         private const val EGL_OPENGL_ES3_BIT = 0x40
 
+        // Les deux étapes déclarent leurs nombres en haute précision : une uniforme partagée entre elles
+        // doit avoir la même précision, sinon certains GPU refusent la liaison.
         private const val SURF_VS = """#version 300 es
+precision highp float;
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNor;
 uniform mat4 uMvp;
@@ -418,7 +566,7 @@ void main() {
 }"""
 
         private const val SURF_FS = """#version 300 es
-precision mediump float;
+precision highp float;
 in vec3 vN;
 in float vY;
 uniform vec3 uColor;
@@ -428,13 +576,15 @@ out vec4 o;
 void main() {
     vec3 n = normalize(vN);
     float rim = 1.0 - abs(n.z);
-    float a = (0.035 + pow(rim, 2.4) * 0.55) * uAlpha;
-    float s = exp(-(vY - uScan) * (vY - uScan) * 1.2) * 0.22 * uAlpha;
+    float key = max(dot(n, normalize(vec3(-0.4, 0.6, 0.7))), 0.0);
+    float a = (0.03 + pow(rim, 2.2) * 0.55 + key * 0.05) * uAlpha;
+    float s = exp(-(vY - uScan) * (vY - uScan) * 1.2) * 0.2 * uAlpha;
     vec3 c = uColor * (a + s) + vec3(0.6, 0.9, 1.0) * s * 0.4;
     o = vec4(c, clamp(a + s, 0.0, 1.0));
 }"""
 
         private const val LINE_VS = """#version 300 es
+precision highp float;
 layout(location = 0) in vec3 aPos;
 uniform mat4 uMvp;
 uniform vec3 uOffset;
@@ -461,7 +611,7 @@ void main() {
     if (uPoint > 0.0) {
         float d = length(gl_PointCoord - vec2(0.5));
         if (d > 0.5) discard;
-        a *= 1.0 - d * 1.6;
+        a *= pow(1.0 - d * 2.0, 1.6);
     }
     float s = exp(-(vY - uScan) * (vY - uScan) * 1.2) * 0.8;
     a = clamp(a * (1.0 + s), 0.0, 1.0);
