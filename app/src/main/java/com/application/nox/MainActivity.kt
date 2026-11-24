@@ -88,6 +88,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         Nox.init(this)
         Nox.ui = this
         voiceOut = VoiceOut(this, prefs, this)
+        voiceOut.onMuted = {
+            toast("Nox parle, mais le volume des médias est à zéro : monte le son")
+            if (::voicePage.isInitialized) voicePage.notice("🔇 Volume des médias à zéro : monte le son pour entendre Nox")
+        }
 
         window.setDecorFitsSystemWindows(false)   // bord à bord partout, on gère les marges nous-mêmes
         root = buildUi()

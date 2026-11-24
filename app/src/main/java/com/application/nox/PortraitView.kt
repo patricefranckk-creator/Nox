@@ -301,7 +301,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             u4(warpProg, "uLight", vein, gem, dim, flow)
             u2(warpProg, "uGem", gemX, gemY)
             u1(warpProg, "uPhase", (b.t * 0.55f) % 1f)
-            u1(warpProg, "uHot", if (hot) 1f else 0f)
+            u1(warpProg, "uHot", if (hot || Nox.engine.busy) 1f else 0f)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTex[0])
             u1i(warpProg, "uComp", 0)

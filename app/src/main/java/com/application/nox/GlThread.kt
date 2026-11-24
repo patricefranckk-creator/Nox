@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
+import kotlin.math.max
 
 /**
  * Fil de rendu OpenGL ES 3 commun aux avatars (3D et portrait) : contexte EGL sur une SurfaceTexture,
@@ -61,7 +62,8 @@ abstract class GlThread(
                 frame(dt, hot)
                 EGL14.eglSwapBuffers(display, surface)
                 val spent = SystemClock.uptimeMillis() - now
-                val budget = if (hot) 66L else 1000L / fps
+                // Gemma partage la carte graphique : pendant qu'il réfléchit, l'animation ralentit à 24 images/s
+                val budget = when { hot -> 66L; Nox.engine.busy -> max(42L, 1000L / fps); else -> 1000L / fps }
                 if (spent < budget) sleep(budget - spent)
             }
         } catch (_: InterruptedException) {

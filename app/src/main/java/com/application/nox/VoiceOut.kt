@@ -16,6 +16,12 @@ import java.util.Locale
  */
 class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Listener) : TextToSpeech.OnInitListener {
 
+    private val audio = ctx.getSystemService(android.media.AudioManager::class.java)
+    private var silentWarned = 0L
+
+    /** Appelé quand Nox parle mais que le volume des médias est à zéro (rien ne s'entendrait). */
+    var onMuted: (() -> Unit)? = null
+
     interface Listener {
         fun onSpeakingChanged(speaking: Boolean)
         /** Plus rien à dire ET la génération est terminée. */
@@ -49,7 +55,9 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {
                 val text = id?.let { texts[it] }
+                NoxLog.d("VOIX", "Lecture de $id : ${text?.take(50)}")
                 main.post {
+                    checkVolume()
                     setSpeaking(true)
                     if (text != null) FaceBrain.sentence(text)
                 }
@@ -198,7 +206,20 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         val id = "nox-${seq++}"
         texts[id] = t
         pending++
-        tts.speak(t, TextToSpeech.QUEUE_ADD, Bundle(), id)
+        val r = tts.speak(t, TextToSpeech.QUEUE_ADD, Bundle(), id)
+        if (r != TextToSpeech.SUCCESS) {
+            NoxLog.w("VOIX", "La synthèse vocale a refusé la phrase $id (code $r)")
+            texts.remove(id)
+            utteranceFinished()
+        }
+    }
+
+    private fun checkVolume() {
+        val v = audio?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: return
+        if (v > 0 || System.currentTimeMillis() - silentWarned < 60_000) return
+        silentWarned = System.currentTimeMillis()
+        NoxLog.w("VOIX", "Nox parle mais le volume des médias est à zéro")
+        onMuted?.invoke()
     }
 
     private fun utteranceFinished() {
