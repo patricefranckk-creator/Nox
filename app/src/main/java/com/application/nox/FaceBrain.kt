@@ -16,7 +16,7 @@ object FaceBrain {
     class Pose(var smile: Float, var brow: Float, var arch: Float, var inner: Float, var asym: Float,
                var eye: Float, var tilt: Float, var open: Float)
 
-    private class Shape(val open: Float, val width: Float, val ms: Float)
+    private class Shape(val id: String, val open: Float, val width: Float, val ms: Float)
 
     @Volatile var state = NeuronView.State.IDLE
     @Volatile var emotion = Emotion.NEUTRE
@@ -26,6 +26,8 @@ object FaceBrain {
     val cur = Pose(0f, 0f, 6f, 0f, 0f, 1f, 0f, 0f)
     var mouthOpen = 0f; private set
     var mouthWidth = 1f; private set
+    /** Visème en cours (« A », « MBP », « OU »…), ou « » quand la bouche ne parle pas. */
+    var viseme = ""; private set
     var levelS = 0f; private set
     var blinkK = 1f; private set
     var gx = 0f; private set
@@ -52,7 +54,7 @@ object FaceBrain {
         talking = true
     }
 
-    /** La voix prononce ce mot maintenant : formes de bouche, voyelle par voyelle. */
+    /** La voix prononce ce mot maintenant : formes de bouche (visèmes du français), son par son. */
     @Synchronized fun word(w: String, rate: Float) {
         lastWordAt = SystemClock.uptimeMillis()
         val f = Text.fold(w.lowercase())
@@ -63,26 +65,35 @@ object FaceBrain {
             val c = f[i]
             val two = if (i + 1 < f.length) f.substring(i, i + 2) else ""
             val three = if (i + 2 < f.length) f.substring(i, i + 3) else ""
+            val last = i == f.length - 1
             when {
-                c in "mbp" -> { out += Shape(0f, 0.95f, unit * 0.55f); i++ }
-                c in "fv" -> { out += Shape(0.12f, 1.02f, unit * 0.5f); i++ }
-                three == "eau" -> { out += Shape(0.55f, 0.72f, unit * 1.2f); i += 3 }
-                three == "ain" || three == "ein" -> { out += Shape(0.45f, 1.05f, unit); i += 3 }
-                two == "ou" -> { out += Shape(0.32f, 0.66f, unit); i += 2 }
-                two == "au" || two == "on" || two == "om" -> { out += Shape(0.55f, 0.74f, unit); i += 2 }
-                two == "oi" -> { out += Shape(0.4f, 0.72f, unit * 0.5f); out += Shape(0.85f, 1f, unit * 0.7f); i += 2 }
-                two == "an" || two == "en" || two == "am" || two == "em" -> { out += Shape(0.7f, 0.9f, unit); i += 2 }
-                two == "in" -> { out += Shape(0.45f, 1.05f, unit); i += 2 }
-                c == 'a' -> { out += Shape(0.9f, 1f, unit); i++ }
-                c == 'o' -> { out += Shape(0.6f, 0.75f, unit); i++ }
-                c == 'u' -> { out += Shape(0.3f, 0.65f, unit); i++ }
-                c == 'e' -> { val last = i == f.length - 1; out += Shape(if (last) 0.2f else 0.5f, 1.04f, unit * if (last) 0.5f else 1f); i++ }
-                c == 'i' || c == 'y' -> { out += Shape(0.3f, 1.15f, unit * 0.85f); i++ }
-                c.isLetter() -> { out += Shape(0.22f, 1f, unit * 0.35f); i++ }
+                last && f.length > 2 && c in "stdxz" -> i++
+                c in "mbp" -> { out += Shape("MBP", 0f, 0.95f, unit * 0.55f); i++ }
+                c in "fv" -> { out += Shape("FV", 0.12f, 1.02f, unit * 0.5f); i++ }
+                two == "ch" || c == 'j' || (c == 'g' && i + 1 < f.length && f[i + 1] in "ei") -> { out += Shape("CHJ", 0.15f, 0.8f, unit * 0.6f); i += if (two == "ch") 2 else 1 }
+                two == "gn" -> { out += Shape("RKG", 0.25f, 1f, unit * 0.5f); i += 2 }
+                three == "eau" -> { out += Shape("O", 0.55f, 0.72f, unit * 1.2f); i += 3 }
+                three == "ain" || three == "ein" -> { out += Shape("E", 0.45f, 1.05f, unit); i += 3 }
+                two == "ou" -> { out += Shape("OU", 0.32f, 0.66f, unit); i += 2 }
+                two == "au" || two == "on" || two == "om" -> { out += Shape("O", 0.55f, 0.74f, unit); i += 2 }
+                two == "oi" -> { out += Shape("OU", 0.4f, 0.72f, unit * 0.5f); out += Shape("A", 0.85f, 1f, unit * 0.7f); i += 2 }
+                two == "eu" || two == "oe" -> { out += Shape("EU", 0.45f, 0.8f, unit); i += 2 }
+                two == "an" || two == "en" || two == "am" || two == "em" -> { out += Shape("EU", 0.7f, 0.9f, unit); i += 2 }
+                two == "ai" || two == "ei" -> { out += Shape("E", 0.5f, 1.04f, unit); i += 2 }
+                two == "in" -> { out += Shape("E", 0.45f, 1.05f, unit); i += 2 }
+                c == 'a' -> { out += Shape("A", 0.9f, 1f, unit); i++ }
+                c == 'o' -> { out += Shape("O", 0.6f, 0.75f, unit); i++ }
+                c == 'u' -> { out += Shape("OU", 0.3f, 0.65f, unit); i++ }
+                c == 'e' -> { out += if (last) Shape("EU", 0.2f, 1f, unit * 0.5f) else Shape("E", 0.5f, 1.04f, unit); i++ }
+                c == 'i' || c == 'y' -> { out += Shape("I", 0.3f, 1.15f, unit * 0.85f); i++ }
+                c in "ltdn" -> { out += Shape("LTDN", 0.25f, 1f, unit * 0.4f); i++ }
+                c in "szx" || (c == 'c' && i + 1 < f.length && f[i + 1] in "ei") -> { out += Shape("SZ", 0.15f, 1.05f, unit * 0.45f); i++ }
+                c in "rkgqc" -> { out += Shape("RKG", 0.25f, 1f, unit * 0.4f); i++ }
+                c.isLetter() -> { out += Shape("LTDN", 0.22f, 1f, unit * 0.35f); i++ }
                 else -> i++
             }
         }
-        if (out.isEmpty()) out += Shape(0.4f, 1f, unit)
+        if (out.isEmpty()) out += Shape("A", 0.4f, 1f, unit)
         shapes.clear()
         shapes.addAll(out)
         shapeLeft = 0f
@@ -152,8 +163,10 @@ object FaceBrain {
         var wantOpen = cur.open
         var wantWidth = 1f
         val speaking = state == NeuronView.State.SPEAKING && talking
+        viseme = ""
         if (speaking && shapes.isNotEmpty()) {
             val s = shapes.first()
+            viseme = s.id
             wantOpen = max(wantOpen, s.open); wantWidth = s.width
             shapeLeft += dt * 1000f
             if (shapeLeft >= s.ms) { shapes.removeFirst(); shapeLeft = 0f }

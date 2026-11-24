@@ -2,23 +2,14 @@ package com.application.nox
 
 import android.content.Context
 import android.graphics.SurfaceTexture
-import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
-import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.Matrix
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.os.SystemClock
 import android.view.TextureView
 import android.view.View
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.nio.ShortBuffer
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -149,15 +140,10 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
     // ================================================================== rendu
 
-    private inner class Renderer(private val st: SurfaceTexture, private val mesh: FaceMesh) : Thread("nox-avatar-3d") {
-        @Volatile var running = true
-        @Volatile var paused = false
-        @Volatile var w = 0
-        @Volatile var h = 0
-
-        private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
-        private var context: EGLContext = EGL14.EGL_NO_CONTEXT
-        private var surface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private inner class Renderer(st: SurfaceTexture, private val mesh: FaceMesh) : GlThread(st, "nox-avatar-3d", power, 30, { t ->
+        NoxLog.e("AVATAR", "Avatar 3D impossible sur cet appareil, retour au visage 2,5D", t)
+        main.post { onFail?.invoke() }
+    }) {
 
         private var surfProg = 0
         private var lineProg = 0
@@ -193,70 +179,16 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         private val mvEye = FloatArray(16)
         private val mvpEye = FloatArray(16)
 
-        override fun run() {
-            try {
-                egl()
-                setup()
-                NoxLog.i("AVATAR", "Avatar 3D prêt (OpenGL ES ${GLES30.glGetString(GLES30.GL_VERSION)})")
-                var last = SystemClock.uptimeMillis()
-                var hot = false
-                var hotCheck = 0L
-                while (running) {
-                    if (paused) { sleep(120); last = SystemClock.uptimeMillis(); continue }
-                    val now = SystemClock.uptimeMillis()
-                    if (now - hotCheck > 5000) { hotCheck = now; hot = (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE }
-                    val dt = ((now - last) / 1000f).coerceIn(0.001f, 0.1f)
-                    last = now
-                    FaceBrain.step(dt)
-                    synchronized(FaceBrain) { mesh.update(FaceBrain) }
-                    particles(dt)
-                    draw(hot)
-                    EGL14.eglSwapBuffers(display, surface)
-                    val spent = SystemClock.uptimeMillis() - now
-                    val frame = if (hot) 66L else 33L
-                    if (spent < frame) sleep(frame - spent)
-                }
-            } catch (_: InterruptedException) {
-            } catch (t: Throwable) {
-                NoxLog.e("AVATAR", "Avatar 3D impossible sur cet appareil, retour au visage 2,5D", t)
-                main.post { onFail?.invoke() }
-            } finally {
-                release()
-            }
-        }
-
-        // ------------------------------------------------------------ EGL
-
-        private fun egl() {
-            display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-            val v = IntArray(2)
-            check(EGL14.eglInitialize(display, v, 0, v, 1)) { "eglInitialize" }
-            val attribs = intArrayOf(
-                EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL14.EGL_NONE,
-            )
-            val configs = arrayOfNulls<EGLConfig>(1)
-            val n = IntArray(1)
-            check(EGL14.eglChooseConfig(display, attribs, 0, configs, 0, 1, n, 0) && n[0] > 0) { "pas de configuration OpenGL ES 3" }
-            context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0)
-            check(context != EGL14.EGL_NO_CONTEXT) { "contexte OpenGL ES 3 refusé" }
-            surface = EGL14.eglCreateWindowSurface(display, configs[0], st, intArrayOf(EGL14.EGL_NONE), 0)
-            check(surface != EGL14.EGL_NO_SURFACE) { "surface refusée" }
-            check(EGL14.eglMakeCurrent(display, surface, surface, context)) { "eglMakeCurrent" }
-        }
-
-        private fun release() {
-            if (display == EGL14.EGL_NO_DISPLAY) return
-            EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-            if (surface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display, surface)
-            if (context != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, context)
-            EGL14.eglTerminate(display)
-            display = EGL14.EGL_NO_DISPLAY
+        override fun frame(dt: Float, hot: Boolean) {
+            FaceBrain.step(dt)
+            synchronized(FaceBrain) { mesh.update(FaceBrain) }
+            particles(dt)
+            draw(hot)
         }
 
         // ------------------------------------------------------------ préparation
 
-        private fun setup() {
+        override fun setup() {
             surfProg = program(SURF_VS, SURF_FS)
             lineProg = program(LINE_VS, LINE_FS)
             GLES30.glGenBuffers(vbo.size, vbo, 0)
@@ -303,6 +235,7 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             GLES30.glDisable(GLES30.GL_CULL_FACE)
             GLES30.glEnable(GLES30.GL_BLEND)
+            NoxLog.i("AVATAR", "Avatar 3D prêt (OpenGL ES ${GLES30.glGetString(GLES30.GL_VERSION)})")
         }
 
         /** Circuits lumineux sur le buste : clavicules et lignes de données. */
@@ -508,47 +441,9 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             u3(lineProg, "uScale", sx, sy, 1f)
             u1(lineProg, "uPoint", point)
         }
-
-        // ------------------------------------------------------------ aides GL
-
-        private fun attrib(buffer: Int, loc: Int) {
-            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, buffer)
-            GLES30.glEnableVertexAttribArray(loc)
-            GLES30.glVertexAttribPointer(loc, 3, GLES30.GL_FLOAT, false, 12, 0)
-        }
-
-        private fun uMat(p: Int, n: String, m: FloatArray) = GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(p, n), 1, false, m, 0)
-        private fun u1(p: Int, n: String, v: Float) = GLES30.glUniform1f(GLES30.glGetUniformLocation(p, n), v)
-        private fun u3(p: Int, n: String, a: Float, b: Float, c: Float) = GLES30.glUniform3f(GLES30.glGetUniformLocation(p, n), a, b, c)
-
-        private fun program(vs: String, fs: String): Int {
-            fun shader(type: Int, src: String): Int {
-                val s = GLES30.glCreateShader(type)
-                GLES30.glShaderSource(s, src)
-                GLES30.glCompileShader(s)
-                val ok = IntArray(1)
-                GLES30.glGetShaderiv(s, GLES30.GL_COMPILE_STATUS, ok, 0)
-                check(ok[0] != 0) { "shader : " + GLES30.glGetShaderInfoLog(s) }
-                return s
-            }
-            val p = GLES30.glCreateProgram()
-            GLES30.glAttachShader(p, shader(GLES30.GL_VERTEX_SHADER, vs))
-            GLES30.glAttachShader(p, shader(GLES30.GL_FRAGMENT_SHADER, fs))
-            GLES30.glLinkProgram(p)
-            val ok = IntArray(1)
-            GLES30.glGetProgramiv(p, GLES30.GL_LINK_STATUS, ok, 0)
-            check(ok[0] != 0) { "programme : " + GLES30.glGetProgramInfoLog(p) }
-            return p
-        }
-
-        private fun floats(n: Int): FloatBuffer = ByteBuffer.allocateDirect(n * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        private fun floats(a: FloatArray): FloatBuffer = floats(a.size).apply { put(a); flip() }
-        private fun shorts(a: ShortArray): ShortBuffer = ByteBuffer.allocateDirect(a.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer().apply { put(a); flip() }
     }
 
     companion object {
-        private const val EGL_OPENGL_ES3_BIT = 0x40
-
         // Les deux étapes déclarent leurs nombres en haute précision : une uniforme partagée entre elles
         // doit avoir la même précision, sinon certains GPU refusent la liaison.
         private const val SURF_VS = """#version 300 es

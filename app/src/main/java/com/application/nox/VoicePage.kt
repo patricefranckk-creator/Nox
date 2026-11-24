@@ -30,6 +30,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     /** Visage holographique 2,5D et avatar 3D, à la place du neurone selon le choix (boutons en bas). */
     val face = FaceView(a).apply { contentDescription = "Nox : toucher pour parler" }
     val avatar = Avatar3DView(a).apply { contentDescription = "Nox : toucher pour parler" }
+    /** Le portrait animé (marionnette 2D d'après les images importées). */
+    val portrait = PortraitView(a).apply { contentDescription = "Nox : toucher pour parler" }
     private val looks = android.widget.LinearLayout(a).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         background = Ui.rounded(0xFF101A2E.toInt(), a.dp(22).toFloat())
@@ -48,6 +50,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     private val lookNeuron = lookButton("Neurone")
     private val lookFace = lookButton("Visage")
     private val look3d = lookButton("3D")
+    private val lookPortrait = lookButton("Portrait")
     var isOpen = false; private set
 
     /** Le mot d'état, au-dessus du neurone : couleur de l'onde, fondu à chaque changement, respiration douce. */
@@ -70,13 +73,26 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         page.addView(neuron, FrameLayout.LayoutParams(size, size, android.view.Gravity.CENTER))
         page.addView(face, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
         page.addView(avatar, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
-        looks.addView(lookNeuron); looks.addView(lookFace); looks.addView(look3d)
+        page.addView(portrait, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
+        looks.addView(lookNeuron); looks.addView(lookFace); looks.addView(look3d); looks.addView(lookPortrait)
         page.addView(looks, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = a.dp(36) })
         page.addView(subtitle, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = a.dp(36 + 52 + 18) })
         lookNeuron.setOnClickListener { setLook("neurone") }
         lookFace.setOnClickListener { setLook("visage") }
         look3d.setOnClickListener { setLook("avatar3d") }
-        for (v in listOf(face, avatar)) {
+        lookPortrait.setOnClickListener {
+            if (PortraitAssets.ready(a)) setLook("portrait")
+            else {
+                a.toast("Choisis le ZIP (ou les PNG) des images de Nox")
+                PortraitAssets.pick(a)
+            }
+        }
+        lookPortrait.setOnLongClickListener { PortraitAssets.pick(a); true }
+        portrait.onFail = { msg ->
+            a.toast(msg)
+            setLook("visage")
+        }
+        for (v in listOf(face, avatar, portrait)) {
             v.setOnClickListener { a.onNeuronTap() }
             v.setOnLongClickListener { a.toggleHandsFree(); true }
         }
@@ -119,6 +135,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         neuron.contentDescription = "Nox : $text"
         face.contentDescription = "Nox : $text"
         avatar.contentDescription = "Nox : $text"
+        portrait.contentDescription = "Nox : $text"
         showWord(state)
     }
 
@@ -146,7 +163,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     }
 
     fun caption(text: String) {
-        neuron.contentDescription = "Nox : $text"; face.contentDescription = "Nox : $text"; avatar.contentDescription = "Nox : $text"
+        neuron.contentDescription = "Nox : $text"; face.contentDescription = "Nox : $text"
+        avatar.contentDescription = "Nox : $text"; portrait.contentDescription = "Nox : $text"
     }
 
     /** Ce que la reconnaissance vocale entend (en direct), puis la phrase comprise. */
@@ -178,26 +196,34 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         gravity = Gravity.CENTER
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         typeface = Ui.BOLD
-        minHeight = a.dp(44); minWidth = a.dp(84)
-        setPadding(a.dp(16), 0, a.dp(16), 0)
+        minHeight = a.dp(44); minWidth = a.dp(72)
+        setPadding(a.dp(12), 0, a.dp(12), 0)
         isClickable = true; isFocusable = true
     }
 
     private fun setLook(look: String) {
         if (a.prefs.look == look) return
         a.prefs.look = look
-        NoxLog.i("VISAGE", "Apparence : " + when (look) { "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
+        NoxLog.i("VISAGE", "Apparence : " + when (look) { "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
         applyLook()
     }
 
-    private fun current(): View = when (a.prefs.look) { "avatar3d" -> avatar; "visage" -> face; else -> neuron }
+    private fun current(): View = when (a.prefs.look) { "portrait" -> portrait; "avatar3d" -> avatar; "visage" -> face; else -> neuron }
+
+    /** Images du portrait importées : on l'affiche et le rendu repart avec elles. */
+    fun portraitReady() {
+        a.prefs.look = "portrait"
+        applyLook()
+        portrait.reload()
+    }
 
     private fun applyLook() {
-        val look = a.prefs.look
+        val look = a.prefs.look.let { if (it == "portrait" && !PortraitAssets.ready(a)) "visage" else it }
+        portrait.visibility = if (look == "portrait") View.VISIBLE else View.GONE
         face.visibility = if (look == "visage") View.VISIBLE else View.GONE
         avatar.visibility = if (look == "avatar3d") View.VISIBLE else View.GONE
         neuron.visibility = if (look == "neurone") View.VISIBLE else View.GONE
-        for ((v, on) in listOf(lookNeuron to (look == "neurone"), lookFace to (look == "visage"), look3d to (look == "avatar3d"))) {
+        for ((v, on) in listOf(lookNeuron to (look == "neurone"), lookFace to (look == "visage"), look3d to (look == "avatar3d"), lookPortrait to (look == "portrait"))) {
             v.background = if (on) Ui.rounded(0xFF4FA6FF.toInt(), a.dp(20).toFloat()) else null
             v.setTextColor(if (on) 0xFF06101E.toInt() else 0xFFA9B4C9.toInt())
             v.contentDescription = (if (on) "Apparence choisie : " else "Choisir l'apparence : ") + v.text

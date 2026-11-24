@@ -1149,6 +1149,14 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         return sb.toString().trim().trim('"', '«', '»', ' ')
     }
 
+    /** Bilan de l'import des images du portrait ; le portrait s'affiche s'il est prêt. */
+    fun portraitImported(report: String) {
+        if (PortraitAssets.ready(this) && ::voicePage.isInitialized) voicePage.portraitReady()
+        NoxDialog.Builder(this).setTitle("Portrait de Nox").setIcon("🖼").setMessage(report)
+            .setPositiveButton(if (PortraitAssets.ready(this)) "Voir Nox" else "OK") { _, _ -> if (PortraitAssets.ready(this)) openVoicePage(false) }
+            .show()
+    }
+
     fun runText(t: String) = send(t)
 
     /** Copie de la conversation en cours (banc d'essai : on remet le modèle dans l'état d'avant). */
@@ -1315,6 +1323,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == ModelsDialog.REQ_IMPORT) ModelsDialog.onImportResult(this, resultCode, data)
+        if (requestCode == PortraitAssets.REQ_IMPORT) PortraitAssets.onResult(this, resultCode, data)
         if (requestCode == REQ_IMAGE && resultCode == RESULT_OK) data?.data?.let { loadImage(it) }
         if (requestCode == REQ_CAMERA) {
             val uri = cameraUri
