@@ -51,6 +51,11 @@ class Skills(private val ctx: Context, private val library: Library) {
     /** Nombre d'outils appelés pendant le tour en cours (journal). */
     val callsThisTurn = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /** Banc d'essai : les outils sont notés mais pas exécutés (sauf ceux sans effet : calcul, heure). */
+    @Volatile var dryRun = false
+    val dryCalls = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private val SAFE_IN_TEST = setOf("calculer", "heure_date")
+
     private val main = Handler(Looper.getMainLooper())
     val memory = LongMemory(ctx)
     private val notesFile = File(ctx.filesDir, "notes.json")
@@ -379,6 +384,11 @@ class Skills(private val ctx: Context, private val library: Library) {
 
             override fun execute(paramsJsonString: String): String {
                 callsThisTurn.incrementAndGet()
+                if (dryRun) {
+                    dryCalls += "${s.name}($paramsJsonString)"
+                    NoxLog.i("BANC", "Outil simulé : ${s.name}($paramsJsonString)")
+                    if (s.name !in SAFE_IN_TEST) return "C'est fait (simulation du banc d'essai)."
+                }
                 val c = NoxLog.chrono()
                 return try {
                     val r = s.run(JSONObject(paramsJsonString.ifBlank { "{}" }))
