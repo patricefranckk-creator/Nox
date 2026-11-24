@@ -28,6 +28,8 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
     private val buffer = StringBuilder()
     private var inCodeBlock = false
     private var pending = 0
+    /** Texte de chaque phrase en cours de lecture, pour le visage (émotion, mots prononcés). */
+    private val texts = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var seq = 0
     private var streamClosed = true
     private var streamActive = false
@@ -46,11 +48,23 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         applyVoice()
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {
-                main.post { setSpeaking(true) }
+                val text = id?.let { texts[it] }
+                main.post {
+                    setSpeaking(true)
+                    if (text != null) FaceView.current?.sentence(text)
+                }
+            }
+
+            override fun onRangeStart(id: String?, start: Int, end: Int, frame: Int) {
+                val text = id?.let { texts[it] } ?: return
+                if (start < 0 || end > text.length || start >= end) return
+                val w = text.substring(start, end)
+                main.post { FaceView.current?.word(w, prefs.speechRate) }
             }
 
             override fun onDone(id: String?) {
-                main.post { utteranceFinished() }
+                id?.let { texts.remove(it) }
+                main.post { FaceView.current?.silent(); utteranceFinished() }
             }
 
             @Deprecated("Deprecated in Java")
@@ -131,6 +145,8 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         streamActive = false
         buffer.setLength(0)
         pending = 0
+        texts.clear()
+        FaceView.current?.silent()
         if (ok) tts.stop()
         setSpeaking(false)
     }
@@ -180,6 +196,7 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
             .trim()
         if (t.isEmpty() || t.none { it.isLetterOrDigit() }) return
         val id = "nox-${seq++}"
+        texts[id] = t
         pending++
         tts.speak(t, TextToSpeech.QUEUE_ADD, Bundle(), id)
     }

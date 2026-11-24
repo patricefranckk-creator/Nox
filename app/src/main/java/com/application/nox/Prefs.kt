@@ -111,6 +111,11 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putBoolean("rag_first", v).apply()
 
     /** « cherche sur internet… » : recherche web puis réponse écrite par Nox. */
+    /** Page vocale : visage holographique (vrai) ou neurone (faux). */
+    var faceLook: Boolean
+        get() = sp.getBoolean("face_look", true)
+        set(v) = sp.edit().putBoolean("face_look", v).apply()
+
     /** Scores du banc d'essai (JSON), pour comparer les versions. */
     var benchHistory: String
         get() = sp.getString("bench_history", "[]") ?: "[]"

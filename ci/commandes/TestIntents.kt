@@ -49,6 +49,11 @@ fun testIntents(): Int {
         val n = Commands.matchAll(t)?.size ?: 0
         if (n != want) { bad++; println("✗ enchaînement « $t » → $n commande(s) (attendu $want)") } else println("✓ enchaînement « $t » → $n")
     }
+    val emos = listOf("Bonne nouvelle : il fera beau demain !" to Emotion.JOIE, "Je suis désolé que ta journée ait été difficile." to Emotion.EMPATHIE,
+        "Attention : appelle le 15 si la brûlure est grave." to Emotion.SERIEUX, "Ah bon ? Je ne savais pas !" to Emotion.SURPRISE,
+        "Tu veux que je l'ajoute à l'agenda ?" to Emotion.QUESTION, "Le rendez-vous est noté pour jeudi." to Emotion.NEUTRE,
+        "Ce n'est pas super, mais ça ira." to Emotion.NEUTRE)
+    for ((t, want) in emos) if (Emotion.of(t) != want) { bad++; println("✗ émotion « $t » → ${Emotion.of(t)} (attendu $want)") } else println("✓ émotion « $t » → $want")
     println("Phrases spéciales : ${cases.size + 4 - bad}/${cases.size + 4} correctes (+ souvenirs, incertitudes, indices, enchaînements)")
     return bad
 }

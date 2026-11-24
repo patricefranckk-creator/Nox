@@ -43,7 +43,7 @@ jobs:
       - name: Tests des commandes directes et phrases spéciales
         run: |
           curl -sSLo json.jar https://repo1.maven.org/maven2/org/json/json/20240303/json-20240303.jar
-          kotlinc -cp json.jar ci/commandes/*.kt app/src/main/java/com/application/nox/Commands.kt app/src/main/java/com/application/nox/MathEval.kt app/src/main/java/com/application/nox/Intents.kt -include-runtime -d commandes.jar 2>&1 | grep -v "^warning" || true
+          kotlinc -cp json.jar ci/commandes/*.kt app/src/main/java/com/application/nox/Commands.kt app/src/main/java/com/application/nox/MathEval.kt app/src/main/java/com/application/nox/Intents.kt app/src/main/java/com/application/nox/Emotion.kt -include-runtime -d commandes.jar 2>&1 | grep -v "^warning" || true
           java -cp commandes.jar:json.jar com.application.nox.TestCommandesKt
 
       - uses: gradle/actions/setup-gradle@v6

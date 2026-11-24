@@ -27,6 +27,15 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         isClickable = true
     }
     val neuron = NeuronView(a, NeuronView.Style.VOICE).apply { contentDescription = "Nox : toucher pour parler" }
+    /** Le visage holographique, à la place du neurone si on le choisit (bouton en bas). */
+    val face = FaceView(a).apply { contentDescription = "Nox : toucher pour parler" }
+    private val looks = android.widget.LinearLayout(a).apply {
+        orientation = android.widget.LinearLayout.HORIZONTAL
+        background = Ui.rounded(0xFF101A2E.toInt(), a.dp(22).toFloat())
+        setPadding(a.dp(4), a.dp(4), a.dp(4), a.dp(4))
+    }
+    private val lookNeuron = lookButton("Neurone")
+    private val lookFace = lookButton("Visage")
     var isOpen = false; private set
 
     /** Le mot d'état, au-dessus du neurone : couleur de l'onde, fondu à chaque changement, respiration douce. */
@@ -47,6 +56,14 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     init {
         val size = (a.resources.displayMetrics.widthPixels * 0.97f).toInt()
         page.addView(neuron, FrameLayout.LayoutParams(size, size, android.view.Gravity.CENTER))
+        page.addView(face, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
+        looks.addView(lookNeuron); looks.addView(lookFace)
+        page.addView(looks, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = a.dp(36) })
+        lookNeuron.setOnClickListener { setLook(false) }
+        lookFace.setOnClickListener { setLook(true) }
+        face.setOnClickListener { a.onNeuronTap() }
+        face.setOnLongClickListener { a.toggleHandsFree(); true }
+        applyLook()
         val top = ((a.resources.displayMetrics.heightPixels - size) / 2 - a.dp(10)).coerceAtLeast(a.dp(56))
         page.addView(word, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { topMargin = top })
         showWord(NeuronView.State.IDLE)
@@ -60,9 +77,10 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         isOpen = true
         page.visibility = View.VISIBLE
         page.alpha = 0f
-        neuron.scaleX = 0.85f; neuron.scaleY = 0.85f
+        val shown = if (a.prefs.faceLook) face else neuron
+        shown.scaleX = 0.85f; shown.scaleY = 0.85f
         page.animate().alpha(1f).setDuration(220).start()
-        neuron.animate().scaleX(1f).scaleY(1f).setDuration(320).start()
+        shown.animate().scaleX(1f).scaleY(1f).setDuration(320).start()
         if (android.os.Build.VERSION.SDK_INT >= 33)
             a.onBackInvokedDispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCb)
     }
@@ -76,7 +94,9 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
 
     fun set(state: NeuronView.State, text: String) {
         neuron.state = state
+        face.state = state
         neuron.contentDescription = "Nox : $text"
+        face.contentDescription = "Nox : $text"
         showWord(state)
     }
 
@@ -103,9 +123,39 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         }.start()
     }
 
-    fun caption(text: String) { neuron.contentDescription = "Nox : $text" }
+    fun caption(text: String) { neuron.contentDescription = "Nox : $text"; face.contentDescription = "Nox : $text" }
 
     fun heard(text: String) {}
 
-    fun setLevel(v: Float) = neuron.setLevel(v)
+    fun setLevel(v: Float) { neuron.setLevel(v); face.setLevel(v) }
+
+    // ------------------------------------------------------------ neurone ou visage
+
+    private fun lookButton(label: String) = TextView(a).apply {
+        text = label
+        gravity = Gravity.CENTER
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        typeface = Ui.BOLD
+        minHeight = a.dp(40); minWidth = a.dp(96)
+        setPadding(a.dp(16), 0, a.dp(16), 0)
+        isClickable = true; isFocusable = true
+    }
+
+    private fun setLook(faceOn: Boolean) {
+        if (a.prefs.faceLook == faceOn) return
+        a.prefs.faceLook = faceOn
+        NoxLog.i("VISAGE", if (faceOn) "Apparence : visage holographique" else "Apparence : neurone")
+        applyLook()
+    }
+
+    private fun applyLook() {
+        val faceOn = a.prefs.faceLook
+        face.visibility = if (faceOn) View.VISIBLE else View.GONE
+        neuron.visibility = if (faceOn) View.GONE else View.VISIBLE
+        for ((v, on) in listOf(lookNeuron to !faceOn, lookFace to faceOn)) {
+            v.background = if (on) Ui.rounded(0xFF4FA6FF.toInt(), a.dp(20).toFloat()) else null
+            v.setTextColor(if (on) 0xFF06101E.toInt() else 0xFFA9B4C9.toInt())
+            v.contentDescription = (if (on) "Apparence choisie : " else "Choisir l'apparence : ") + v.text
+        }
+    }
 }
