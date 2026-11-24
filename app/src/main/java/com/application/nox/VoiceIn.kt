@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -31,6 +33,22 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     /** Silence à attendre avant de considérer la phrase finie. */
     var patienceMs = 2000
     private var startedAt = 0L
+    private var ready = false
+    private val main = Handler(Looper.getMainLooper())
+    /** Le service de reconnaissance n'a jamais répondu : on change de moteur une fois, sinon on le dit. */
+    private val watchdog = Runnable {
+        if (!active || ready) return@Runnable
+        NoxLog.w("VOIX", "Reconnaissance Android muette depuis ${READY_TIMEOUT_MS} ms (sur l'appareil=$onDevice)")
+        try { recognizer?.cancel() } catch (_: Throwable) {}
+        if (!triedFallback) {
+            triedFallback = true
+            build(preferOnDevice = !onDevice)
+            start()
+        } else {
+            active = false
+            listener.onVoiceError("La reconnaissance vocale du téléphone ne répond pas · essaie l'oreille Gemma")
+        }
+    }
 
     val isOnDevice get() = onDevice
 
@@ -54,7 +72,6 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, patienceMs.toLong())
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, (patienceMs - 300).coerceAtLeast(800).toLong())
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 15_000L)
     }
 
     fun start() {
@@ -63,7 +80,11 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
             return
         }
         active = true
+        ready = false
         startedAt = System.currentTimeMillis()
+        NoxLog.d("VOIX", "Écoute Android lancée (sur l'appareil=$onDevice, patience $patienceMs ms)")
+        main.removeCallbacks(watchdog)
+        main.postDelayed(watchdog, READY_TIMEOUT_MS)
         try {
             recognizer?.startListening(intent())
         } catch (t: Throwable) {
@@ -73,20 +94,35 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     }
 
     fun stop() {
+        main.removeCallbacks(watchdog)
         if (!active) return
         active = false
+        NoxLog.d("VOIX", "Écoute Android annulée")
         try { recognizer?.cancel() } catch (_: Throwable) {}
     }
 
+    /** « J'ai fini » : la reconnaissance rend ce qu'elle a déjà entendu au lieu de tout jeter. */
+    fun finish() {
+        if (!active) return
+        NoxLog.d("VOIX", "Fin d'écoute demandée : résultat attendu")
+        try { recognizer?.stopListening() } catch (_: Throwable) { stop(); listener.onNothing() }
+    }
+
     fun release() {
+        main.removeCallbacks(watchdog)
         active = false
         recognizer?.destroy()
         recognizer = null
     }
 
     private val rl = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) = listener.onListening()
-        override fun onBeginningOfSpeech() {}
+        override fun onReadyForSpeech(params: Bundle?) {
+            ready = true
+            main.removeCallbacks(watchdog)
+            NoxLog.d("VOIX", "Micro prêt en ${System.currentTimeMillis() - startedAt} ms")
+            listener.onListening()
+        }
+        override fun onBeginningOfSpeech() = NoxLog.d("VOIX", "Parole détectée")
         override fun onRmsChanged(rmsdB: Float) = listener.onLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() = listener.onLevel(0f)
@@ -98,6 +134,7 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
         }
 
         override fun onResults(results: Bundle?) {
+            main.removeCallbacks(watchdog)
             active = false
             NoxLog.i("VOIX", "Reconnaissance Android OK en ${System.currentTimeMillis() - startedAt} ms (sur l'appareil=$onDevice)")
             val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
@@ -105,6 +142,7 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
         }
 
         override fun onError(error: Int) {
+            main.removeCallbacks(watchdog)
             active = false
             if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && error != SpeechRecognizer.ERROR_CLIENT)
                 NoxLog.w("VOIX", "Reconnaissance Android : erreur $error (sur l'appareil=$onDevice)")
@@ -142,6 +180,7 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
 
     companion object {
         const val FRENCH = "fr-FR"
+        private const val READY_TIMEOUT_MS = 5000L
         /** Langue écoutée (le mode interprète alterne entre le français et l'autre langue). */
         @Volatile var language = FRENCH
     }

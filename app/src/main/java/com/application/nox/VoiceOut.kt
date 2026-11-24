@@ -14,7 +14,7 @@ import java.util.Locale
  * Voix de Nox : synthèse vocale hors-ligne, en STREAMING.
  * Nox commence à parler dès la première phrase générée, sans attendre la fin de la réponse.
  */
-class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Listener) : TextToSpeech.OnInitListener {
+class VoiceOut(private val ctx: Context, private val prefs: Prefs, private val listener: Listener) : TextToSpeech.OnInitListener {
 
     private val audio = ctx.getSystemService(android.media.AudioManager::class.java)
     private var silentWarned = 0L
@@ -29,7 +29,8 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val tts = TextToSpeech(ctx.applicationContext, this)
+    private var tts = TextToSpeech(ctx.applicationContext, this)
+    private var initTries = 1
     private var ok = false
     private val buffer = StringBuilder()
     private var inCodeBlock = false
@@ -42,7 +43,16 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
     var speaking = false; private set
 
     override fun onInit(status: Int) {
-        if (status != TextToSpeech.SUCCESS) { NoxLog.e("VOIX", "Synthèse vocale indisponible (statut $status)"); return }
+        if (status != TextToSpeech.SUCCESS) {
+            NoxLog.e("VOIX", "Synthèse vocale indisponible (statut $status, essai $initTries/$INIT_TRIES)")
+            if (initTries < INIT_TRIES) main.postDelayed({
+                initTries++
+                try { tts.shutdown() } catch (_: Throwable) {}
+                tts = TextToSpeech(ctx.applicationContext, this)
+            }, 1500L * initTries)
+            return
+        }
+        if (initTries > 1) NoxLog.i("VOIX", "Synthèse vocale prête au ${initTries}e essai")
         ok = true
         tts.setAudioAttributes(
             AudioAttributes.Builder()
@@ -238,5 +248,9 @@ class VoiceOut(ctx: Context, private val prefs: Prefs, private val listener: Lis
         if (speaking == s) return
         speaking = s
         listener.onSpeakingChanged(s)
+    }
+
+    private companion object {
+        const val INIT_TRIES = 3
     }
 }

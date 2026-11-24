@@ -438,7 +438,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             audioSemantic = false
             return emptyList()
         }
-        val pool = synchronized(lock) { chunks.filter { it.vec != null && !(it.source.startsWith("chat:") && it.time >= excludeChatsAfter) } }
+        // les anciennes conversations ressemblent toutes à une voix qui parle : jamais par l'audio
+        val pool = synchronized(lock) { chunks.filter { it.vec != null && !it.source.startsWith("chat:") } }
         val scored = pool.mapNotNull { c ->
             val v = c.vec!!
             if (v.size != qv.size) return@mapNotNull null
@@ -566,7 +567,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         const val COS_MID = 0.73
         const val COS_WEAK = 0.70
         /** Voix ↔ texte : les scores croisés sont plus bas que texte ↔ texte. */
-        const val COS_AUDIO = 0.30
+        const val COS_AUDIO = 0.80
         const val BM25_STRONG = 4.0
 
         /**

@@ -656,7 +656,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             !engine.ready -> if (!Nox.loading) ModelsDialog(this).show()
             engine.busy || voiceOut.speaking -> { interrupt(); startListening() }
             capture?.active == true -> capture?.finish()   // « j'ai fini » : on envoie ce qui a été dit
-            voiceIn?.active == true -> { voiceIn?.stop(); setMode(NeuronView.State.IDLE, idleHint()) }
+            voiceIn?.active == true -> { voiceIn?.finish(); setMode(NeuronView.State.THINKING, "Je finis d'écouter…") }
             else -> startListening()
         }
     }
