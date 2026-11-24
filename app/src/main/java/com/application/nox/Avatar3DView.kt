@@ -38,6 +38,9 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
     var onFail: (() -> Unit)? = null
 
     private var renderer: Renderer? = null
+    private var texture: SurfaceTexture? = null
+    private var tw = 0
+    private var th = 0
     private val main = Handler(Looper.getMainLooper())
     private val density = ctx.resources.displayMetrics.density
     private val power = ctx.getSystemService(PowerManager::class.java)
@@ -48,14 +51,23 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
     }
 
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-        renderer = Renderer(st, FaceMesh(context)).also { it.w = w; it.h = h; it.paused = !isShown; it.start() }
+        texture = st; tw = w; th = h
+        startRenderer()
     }
 
-    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) { renderer?.let { it.w = w; it.h = h } }
+    /** (Re)lance le rendu : à la création de la surface, ou quand l'avatar revient à l'écran après un échec. */
+    private fun startRenderer() {
+        val st = texture ?: return
+        if (renderer?.isAlive == true) return
+        renderer = Renderer(st, FaceMesh(context)).also { it.w = tw; it.h = th; it.paused = !isShown; it.start() }
+    }
+
+    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) { tw = w; th = h; renderer?.let { it.w = w; it.h = h } }
 
     override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
         renderer?.let { it.running = false; it.interrupt(); it.join(500) }
         renderer = null
+        texture = null
         return true
     }
 
@@ -64,6 +76,7 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
         renderer?.paused = !isShown
+        if (isShown && renderer?.isAlive != true) startRenderer()
     }
 
     override fun onWindowVisibilityChanged(visibility: Int) {
@@ -436,7 +449,7 @@ void main() {
 }"""
 
         private const val LINE_FS = """#version 300 es
-precision mediump float;
+precision highp float;
 in float vY;
 uniform vec3 uColor;
 uniform float uAlpha;

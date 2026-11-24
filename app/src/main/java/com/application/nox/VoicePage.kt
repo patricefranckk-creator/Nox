@@ -74,7 +74,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
             setLook("visage")
         }
         applyLook()
-        val top = ((a.resources.displayMetrics.heightPixels - size) / 2 - a.dp(10)).coerceAtLeast(a.dp(56))
+        val top = ((a.resources.displayMetrics.heightPixels - size * 1.2f).toInt() / 2 - a.dp(30)).coerceAtLeast(a.dp(48))
         page.addView(word, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { topMargin = top })
         showWord(NeuronView.State.IDLE)
         neuron.setOnClickListener { a.onNeuronTap() }
