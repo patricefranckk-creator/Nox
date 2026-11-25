@@ -93,7 +93,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         }
         lookPortrait.setOnLongClickListener { PortraitAssets.pick(a); true }
         lookHolo.setOnClickListener {
-            if (HoloAssets.ready(a)) setLook("holo")
+            if (HoloAssets.ready(a)) { setLook("holo"); holo.activate() }
             else {
                 a.toast("Choisis le ZIP des vidéos de l'hologramme")
                 HoloAssets.pick(a)

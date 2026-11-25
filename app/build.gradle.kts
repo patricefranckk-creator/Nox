@@ -52,6 +52,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // vidéos de l'hologramme lues directement dans l'APK : jamais compressées
+    androidResources {
+        noCompress += "mp4"
+    }
+
     packaging {
         jniLibs {
             useLegacyPackaging = true

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "mode": "hologram",
+  "video": {
+    "width": 1248,
+    "height": 1248,
+    "fps": 30,
+    "codec": "h264",
+    "audio": false
+  },
+  "transition": {
+    "type": "crossfade",
+    "duration_ms": 250
+  },
+  "states": {
+    "startup": {
+      "file": "nox_startup.mp4",
+      "duration_s": 3,
+      "loop": false
+    },
+    "listening": {
+      "file": "nox_listening.mp4",
+      "duration_s": 60,
+      "loop": true
+    },
+    "thinking": {
+      "file": "nox_thinking.mp4",
+      "duration_s": 60,
+      "loop": true
+    },
+    "speaking": {
+      "file": "nox_speaking.mp4",
+      "duration_s": 120,
+      "loop": true
+    }
+  },
+  "state_priority": [
+    "speaking",
+    "thinking",
+    "listening"
+  ],
+  "startup_next": "current_state",
+  "notes": "Manifest descriptif; adapter aux états réels de Nox. Aucun lip-sync en temps réel."
+}

@@ -15,8 +15,8 @@ import java.util.zip.ZipInputStream
 
 /**
  * Pack vidéo « Hologramme HQ » : quatre vidéos carrées sur fond noir, une par état de Nox, plus un
- * manifeste JSON. Le pack est importé une fois (ZIP choisi par l'utilisateur) et rangé dans l'appli ;
- * rien ne passe par Gemma.
+ * manifeste JSON. Le pack d'origine est livré dans l'APK (assets/holo) ; un pack importé (ZIP choisi
+ * par l'utilisateur) le remplace. Rien ne passe par Gemma.
  */
 object HoloAssets {
     const val REQ_IMPORT = 42
@@ -31,8 +31,10 @@ object HoloAssets {
         "parole" to "speaking", "speak" to "speaking", "talking" to "speaking",
     )
 
-    /** Une vidéo d'état : fichier rangé dans l'appli, lecture en boucle ou non, vitesse. */
-    class Clip(val state: String, val file: File, val loop: Boolean, val speed: Float)
+    /** Une vidéo d'état : fichier importé ou vidéo livrée dans l'APK, lecture en boucle ou non, vitesse. */
+    class Clip(val state: String, val name: String, val file: File?, val asset: String?, val loop: Boolean, val speed: Float) {
+        val id get() = file?.absolutePath ?: "asset:$asset"
+    }
 
     class Pack(val clips: Map<String, Clip>, val transitionMs: Long) {
         fun clip(state: String): Clip? = clips[state]
@@ -40,7 +42,13 @@ object HoloAssets {
 
     fun dir(ctx: Context) = File(ctx.filesDir, "holo")
 
-    fun ready(ctx: Context): Boolean = listOf("listening", "thinking", "speaking").all { File(dir(ctx), "nox_$it.mp4").length() > 0 }
+    private const val ASSETS = "holo"
+
+    private fun imported(ctx: Context) = listOf("listening", "thinking", "speaking").all { File(dir(ctx), "nox_$it.mp4").length() > 0 }
+
+    private fun bundled(ctx: Context): Set<String> = runCatching { ctx.assets.list(ASSETS)?.toSet() }.getOrNull() ?: emptySet()
+
+    fun ready(ctx: Context): Boolean = imported(ctx) || listOf("listening", "thinking", "speaking").all { "nox_$it.mp4" in bundled(ctx) }
 
     fun pick(a: Activity) {
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
@@ -68,14 +76,26 @@ object HoloAssets {
     /** Lit le manifeste rangé (ou les réglages par défaut) : quel fichier pour quel état, boucle, transition. */
     fun load(ctx: Context): Pack {
         val d = dir(ctx)
-        val manifest = File(d, "manifest.json").takeIf { it.exists() }?.let { runCatching { JSONObject(it.readText()) }.getOrNull() }
+        val fromFiles = imported(ctx)
+        val assets = if (fromFiles) emptySet() else bundled(ctx)
+        val text = if (fromFiles) File(d, "manifest.json").takeIf { it.exists() }?.readText()
+            else runCatching { ctx.assets.open("$ASSETS/manifest.json").bufferedReader().use { it.readText() } }.getOrNull()
+        val manifest = text?.let { runCatching { JSONObject(it) }.getOrNull() }
         val wanted = HashMap<String, Triple<String, Boolean?, Float?>>()
         manifest?.let { collect(it, wanted) }
         val clips = HashMap<String, Clip>()
         for (s in STATES) {
-            val (name, loop, speed) = wanted[s] ?: Triple("nox_$s.mp4", null, null)
-            val f = File(d, name.substringAfterLast('/')).takeIf { it.length() > 0 } ?: File(d, "nox_$s.mp4").takeIf { it.length() > 0 } ?: continue
-            clips[s] = Clip(s, f, loop ?: (s != "startup"), (speed ?: 1f).coerceIn(0.25f, 2f))
+            val (path, loop, speed) = wanted[s] ?: Triple("nox_$s.mp4", null, null)
+            val candidates = listOf(path.substringAfterLast('/').lowercase(), "nox_$s.mp4")
+            val l = loop ?: (s != "startup")
+            val v = (speed ?: 1f).coerceIn(0.25f, 2f)
+            if (fromFiles) {
+                val f = candidates.map { File(d, it) }.firstOrNull { it.length() > 0 } ?: continue
+                clips[s] = Clip(s, f.name, f, null, l, v)
+            } else {
+                val n = candidates.firstOrNull { it in assets } ?: continue
+                clips[s] = Clip(s, n, null, "$ASSETS/$n", l, v)
+            }
         }
         val ms = manifest?.let { transition(it) } ?: DEFAULT_TRANSITION_MS
         return Pack(clips, ms.coerceIn(0L, 2000L))
@@ -113,17 +133,21 @@ object HoloAssets {
         }
     }
 
-    private fun transition(any: Any?): Long? = when (any) {
+    /** Durée du fondu : « transition_ms: 250 » ou « transition: { duration_ms: 250 } ». */
+    private fun transition(any: Any?, inside: Boolean = false): Long? = when (any) {
         is JSONObject -> {
             any.keys().asSequence().firstNotNullOfOrNull { k ->
                 val f = Text.fold(k)
-                if ((f.contains("transition") || f.contains("crossfade") || f.contains("fondu")) && any.opt(k) is Number) {
-                    val v = any.optDouble(k)
-                    (if (f.endsWith("_s") || f.endsWith("sec") || v < 5) v * 1000 else v).toLong()
-                } else null
-            } ?: any.keys().asSequence().firstNotNullOfOrNull { transition(any.opt(it)) }
+                val about = f.contains("transition") || f.contains("crossfade") || f.contains("fondu")
+                val v = any.opt(k)
+                when {
+                    v is Number && (about || (inside && (f.contains("duration") || f.contains("duree") || f == "ms"))) ->
+                        (if (f.endsWith("_s") || f.endsWith("sec") || v.toDouble() < 5) v.toDouble() * 1000 else v.toDouble()).toLong()
+                    v is JSONObject && about -> transition(v, true)
+                    else -> null
+                }
+            }
         }
-        is JSONArray -> (0 until any.length()).firstNotNullOfOrNull { transition(any.opt(it)) }
         else -> null
     }
 
@@ -169,20 +193,20 @@ object HoloAssets {
             if (clip == null) {
                 when (s) {
                     "startup" -> notes += "Pas de vidéo de démarrage : Nox ouvrira directement sur l'état en cours."
-                    "idle" -> notes += "Pas de vidéo de repos : la vidéo d'écoute sert aussi au repos, ralentie."
+                    "idle" -> notes += "Pas de vidéo de repos : la boucle d'écoute sert aussi au repos."
                     else -> notes += "⚠ Il manque la vidéo « $label » (nox_$s.mp4)."
                 }
                 continue
             }
-            val info = probe(clip.file)
-            lines += "✓ $label : ${clip.file.name} · ${info.text}" + (if (clip.loop) " · en boucle" else " · une fois")
-            if (info.w > 0 && kotlin.math.abs(info.w - info.h) > 2) notes += "${clip.file.name} n'est pas carrée (${info.w}×${info.h}) : affichée entière, sans déformation."
-            if (!info.hardware) notes += "${clip.file.name} : aucun décodeur matériel trouvé pour ${info.mime}, lecture logicielle (plus gourmande)."
-            NoxLog.i("HOLO", "$label : ${clip.file.name} · ${info.text} · ${if (info.hardware) "décodage matériel" else "décodage logiciel"}")
+            val info = probe(clip.file ?: continue)
+            lines += "✓ $label : ${clip.name} · ${info.text}" + (if (clip.loop) " · en boucle" else " · une fois")
+            if (info.w > 0 && kotlin.math.abs(info.w - info.h) > 2) notes += "${clip.name} n'est pas carrée (${info.w}×${info.h}) : affichée entière, sans déformation."
+            if (!info.hardware) notes += "${clip.name} : aucun décodeur matériel trouvé pour ${info.mime}, lecture logicielle (plus gourmande)."
+            NoxLog.i("HOLO", "$label : ${clip.name} · ${info.text} · ${if (info.hardware) "décodage matériel" else "décodage logiciel"}")
         }
         if (File(out, "manifest.json").exists()) lines += "Manifeste lu · transition ${pack.transitionMs} ms"
         else notes += "Pas de manifeste JSON : réglages par défaut (transition ${pack.transitionMs} ms)."
-        NoxLog.i("HOLO", "Hologramme importé en ${c()} ms")
+        NoxLog.i("HOLO", "Hologramme importé en ${c.ms()} ms")
         return (lines + notes).joinToString("\n") + "\n\nTouche « Holo HQ » dans la page vocale pour le voir."
     }
 
@@ -218,9 +242,10 @@ object HoloAssets {
 
     /** Résumé pour le diagnostic. */
     fun describe(ctx: Context): String {
-        if (!ready(ctx)) return "non importé"
+        if (!ready(ctx)) return "absent"
         val p = load(ctx)
-        return STATES.mapNotNull { s -> p.clip(s)?.let { "${LABELS[s]} ${it.file.name}" } }.joinToString(", ") + " · transition ${p.transitionMs} ms"
+        return (if (imported(ctx)) "pack importé · " else "pack d'origine · ") +
+            STATES.mapNotNull { s -> p.clip(s)?.let { "${LABELS[s]} ${it.name}" } }.joinToString(", ") + " · transition ${p.transitionMs} ms"
     }
 
     val LABELS = mapOf("startup" to "démarrage", "idle" to "repos", "listening" to "écoute", "thinking" to "réflexion", "speaking" to "parole")

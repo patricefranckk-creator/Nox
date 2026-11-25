@@ -36,6 +36,12 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         for (s in slots) addView(s.view, LayoutParams(0, 0, Gravity.CENTER))
     }
 
+    /** Mode hologramme choisi : la vidéo de démarrage est rejouée une fois. */
+    fun activate() {
+        startupPlayed = false
+        if (isShown) { releaseAll(); sync() }
+    }
+
     /** Pack réimporté : on relit le manifeste et on repart de zéro. */
     fun reload() {
         releaseAll()
@@ -67,7 +73,8 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     }
 
     private fun target(p: HoloAssets.Pack): Pair<HoloAssets.Clip, Float>? {
-        if (!startupPlayed) p.clip("startup")?.let { return it to it.speed }
+        // le démarrage ne retarde jamais une réponse : dès que Nox écoute, réfléchit ou parle, on passe à l'état
+        if (!startupPlayed && state == NeuronView.State.IDLE) p.clip("startup")?.let { return it to it.speed }
         val name = when (state) {
             NeuronView.State.LISTENING -> "listening"
             NeuronView.State.THINKING -> "thinking"
@@ -75,8 +82,8 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
             else -> "idle"
         }
         p.clip(name)?.let { return it to it.speed }
-        // pas de vidéo de repos : l'écoute, ralentie
-        return p.clip("listening")?.let { it to it.speed * IDLE_SLOWDOWN }
+        // pas de vidéo de repos : la boucle d'écoute (comme le prévoit le pack)
+        return p.clip("listening")?.let { it to it.speed }
     }
 
     /** Met la vidéo en accord avec l'état ; si un fondu est en cours, on y revient à sa fin. */
@@ -85,11 +92,11 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         val p = pack ?: HoloAssets.load(context).also { pack = it }
         val (clip, speed) = target(p) ?: run { onFail?.invoke("Pack hologramme incomplet : réimporte-le (appui long sur « Holo HQ »)"); return }
         if (clip.state != "startup") startupPlayed = true
-        val key = clip.file.absolutePath + "@" + speed
+        val key = clip.id + "@" + speed
         if (key == showing) return
         val cur = slots[front]
         // même vidéo, autre vitesse (repos ↔ écoute) : on ajuste sans couper
-        if (showing?.substringBefore('@') == clip.file.absolutePath && cur.setSpeed(speed)) { showing = key; return }
+        if (showing?.substringBeforeLast('@') == clip.id && cur.setSpeed(speed)) { showing = key; return }
         switching = true
         showing = key
         val next = slots[1 - front]
@@ -153,7 +160,9 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
             try {
                 p.reset()
                 p.setSurface(s)
-                p.setDataSource(clip.file.absolutePath)
+                val f = clip.file
+                if (f != null) p.setDataSource(f.absolutePath)
+                else context.assets.openFd(clip.asset!!).use { fd -> p.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length) }
                 p.isLooping = clip.loop
                 p.setVolume(0f, 0f)
                 p.setOnPreparedListener { mp ->
@@ -164,14 +173,14 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
                 p.setOnInfoListener { _, what, _ -> if (what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) firstFrame(); false }
                 p.setOnCompletionListener { ended() }
                 p.setOnErrorListener { _, what, extra ->
-                    NoxLog.w("HOLO", "Lecture de ${clip.file.name} impossible (erreur $what/$extra)")
-                    failed("Vidéo ${clip.file.name} illisible sur ce téléphone")
+                    NoxLog.w("HOLO", "Lecture de ${clip.name} impossible (erreur $what/$extra)")
+                    failed("Vidéo ${clip.name} illisible sur ce téléphone")
                     true
                 }
                 p.prepareAsync()
             } catch (t: Throwable) {
-                NoxLog.e("HOLO", "Préparation de ${clip.file.name} impossible", t)
-                failed("Vidéo ${clip.file.name} illisible : ${t.message}")
+                NoxLog.e("HOLO", "Préparation de ${clip.name} impossible", t)
+                failed("Vidéo ${clip.name} illisible : ${t.message}")
             }
         }
 
@@ -202,7 +211,6 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     companion object {
         /** La vidéo de démarrage n'est jouée qu'une fois par lancement de Nox. */
         private var startupPlayed = false
-        private const val IDLE_SLOWDOWN = 0.75f
         private const val FIRST_FRAME_TIMEOUT_MS = 600L
     }
 }
