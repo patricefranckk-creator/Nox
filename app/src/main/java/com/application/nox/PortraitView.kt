@@ -173,6 +173,18 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         // ------------------------------------------------------------ poids des variantes
 
         private fun has(n: String) = layers.containsKey(n.lowercase())
+        private val gazeLayers get() = has("yeux_gauche") && has("yeux_droite")
+
+        /** Répartit [total] entre les deux marches de l'échelle qui encadrent l'ouverture [open]. */
+        private fun ladderAt(ladder: List<String>, open: Float, total: Float) {
+            if (total <= 0f) return
+            val pos = open * (ladder.size - 1)
+            val i = pos.toInt().coerceAtMost(ladder.size - 2)
+            val f = (pos - i).coerceIn(0f, 1f)
+            val e = f * f * (3f - 2f * f)
+            targets[ladder[i]] = (targets[ladder[i]] ?: 0f) + total * (1f - e)
+            targets[ladder[i + 1]] = (targets[ladder[i + 1]] ?: 0f) + total * e
+        }
 
         private fun aim(dt: Float) {
             val b = FaceBrain
@@ -180,14 +192,33 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             val st = b.state
             // bouche : visèmes des mots prononcés, sinon bouche d'expression
             jawTarget = 0f
+            val expr = when (b.emotion) {
+                Emotion.JOIE -> "expression_joie"
+                Emotion.EMPATHIE -> if (has("expression_empathie")) "expression_empathie" else "expression_tristesse"
+                else -> ""
+            }.takeIf { it.isNotEmpty() && has(it) }
             if (st == NeuronView.State.SPEAKING) {
-                // ouverture continue : la mâchoire descend progressivement (fondu + déformation de bouche_a)
                 val open = ((b.mouthOpen - 0.05f) / 0.85f).coerceIn(0f, 1f)
-                val v = "bouche_" + b.viseme
+                val v = "bouche_" + (ALIAS[b.viseme] ?: b.viseme)
                 val special = b.viseme !in PLAIN && has(v)
+                val ladder = LADDER.filter { has(it) }
+                // l'émotion reste visible sous la bouche qui parle
+                if (expr != null) targets[expr] = 0.55f
                 when {
-                    special -> targets[v] = 1f
+                    special -> {
+                        // forme précise (o, ou, sourire…) dosée par l'ouverture, le reste par l'échelle
+                        val k = (0.45f + open).coerceAtMost(1f)
+                        targets[v] = k
+                        if (ladder.size >= 3) ladderAt(ladder, open, 1f - k) else if (has("bouche_repos")) targets["bouche_repos"] = 1f - k
+                    }
+                    ladder.size >= 3 -> {
+                        // échelle d'ouvertures (repos → petite → moyenne → A) : fondu entre deux marches voisines
+                        val lips = if ((b.viseme == "MBP" || b.viseme == "FV") && has("bouche_mbp")) (1f - open) * if (b.viseme == "MBP") 1f else 0.6f else 0f
+                        if (lips > 0f) targets["bouche_mbp"] = lips
+                        ladderAt(ladder, open, 1f - lips)
+                    }
                     else -> {
+                        // deux images seulement : la mâchoire descend par déformation, puis fondu
                         jawTarget = open
                         if (has("bouche_a")) targets["bouche_a"] = ease(open)
                         val closed = 1f - open
@@ -208,6 +239,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                     else -> Triple("", 0f, null)
                 }
                 when {
+                    expr != null && st != NeuronView.State.THINKING && st != NeuronView.State.OFF -> targets[expr] = 1f
                     has(name) -> targets[name] = w
                     alt != null && has(alt) -> if (alt == "bouche_A") { jawTarget = 0.5f; targets[alt] = ease(0.5f) } else targets[alt] = 0.7f
                 }
@@ -219,6 +251,10 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                 if (has("yeux_fermes")) targets["yeux_fermes"] = ((closed - 0.5f) * 2f).coerceIn(0f, 1f)
             } else if (has("yeux_fermes")) targets["yeux_fermes"] = closed
             val open = 1f - closed
+            if (gazeLayers) {
+                val gx = (b.gx / 3f).coerceIn(-1f, 1f)
+                if (gx > 0f) targets["yeux_droite"] = gx * open else targets["yeux_gauche"] = -gx * open
+            }
             when (b.emotion) {
                 Emotion.JOIE -> if (has("yeux_plisses")) targets["yeux_plisses"] = 0.8f * open
                 Emotion.SURPRISE -> if (has("yeux_ecarquilles")) targets["yeux_ecarquilles"] = open
@@ -316,7 +352,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             val yaw = (b.gx / 6f + sin(b.t * 0.45f) * 0.12f).coerceIn(-0.7f, 0.7f)
             val pitch = (-b.gy / 7f + b.nod * 0.12f).coerceIn(-0.7f, 0.7f)
             u4(warpProg, "uHead", yaw, pitch, Math.toRadians((-(b.cur.tilt + b.sway) * 0.55f).toDouble()).toFloat(), b.breath)
-            u2(warpProg, "uGaze", b.gx * 1.1f, b.gy * 0.8f)
+            if (gazeLayers) u2(warpProg, "uGaze", 0f, b.gy * 0.5f) else u2(warpProg, "uGaze", b.gx * 1.1f, b.gy * 0.8f)
             u4(warpProg, "uLight", vein, gem, dim, flow)
             u2(warpProg, "uGem", gemX, gemY)
             u1(warpProg, "uPhase", (b.t * 0.55f) % 1f)
@@ -351,8 +387,12 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         private const val JAW_PX = 48f
         /** Le fondu vers bouche_a se fait au milieu du mouvement : avant, c'est la déformation qui ouvre. */
         private fun ease(t: Float): Float { val x = ((t - 0.3f) / 0.3f).coerceIn(0f, 1f); return x * x * (3f - 2f * x) }
-        private val PLAIN = setOf("", "A", "MBP", "FV", "REPOS")
-        private val GROUPS = listOf(listOf("base_eteinte"), listOf("sourcils_"), listOf("yeux_"), listOf("bouche_"))
+        private val PLAIN = setOf("", "A", "MBP", "FV", "REPOS", "LTDN", "RKG")
+        /** Échelle d'ouverture de la bouche, de fermée à grande ouverte (les marches absentes sont sautées). */
+        private val LADDER = listOf("bouche_repos", "bouche_petite", "bouche_moyenne", "bouche_a")
+        /** Sons sans image propre : on prend la forme la plus proche du lot. */
+        private val ALIAS = mapOf("E" to "rire", "I" to "rire", "SZ" to "rire", "EU" to "o", "CHJ" to "ou")
+        private val GROUPS = listOf(listOf("base_eteinte"), listOf("expression_"), listOf("sourcils_"), listOf("yeux_"), listOf("bouche_"))
 
         private const val COMP_VS = """#version 300 es
 precision highp float;

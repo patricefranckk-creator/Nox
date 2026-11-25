@@ -26,6 +26,8 @@ object PortraitAssets {
     const val REQ_IMPORT = 41
     const val W = 1024
     const val H = 1120
+    /** Centres des iris sur la toile : leur reflet violet n'est pas une veine. */
+    private val EYES = listOf(386 to 422, 642 to 422)
 
     /** Une variante découpée : son nom (« bouche_A »), sa place sur la toile, son image avec transparence. */
     class Layer(val name: String, val x: Int, val y: Int, val w: Int, val h: Int, val bitmap: Bitmap)
@@ -94,10 +96,14 @@ object PortraitAssets {
         save(base, File(out, "base.png"))
 
         // carte de lumière : R = veines, G = gemme, B = distance à la gemme le long du visage
-        val veins = files["masque_veines"]?.let { gray(decode(it, "masque_veines", notes)) }
-        val gem = files["masque_gemme"]?.let { gray(decode(it, "masque_gemme", notes)) }
-        if (veins == null) notes += "nox_masque_veines.png absent : les veines ne s'animeront pas."
-        if (gem == null) notes += "nox_masque_gemme.png absent : la gemme ne s'animera pas."
+        var veins = files["masque_veines"]?.let { gray(decode(it, "masque_veines", notes)) }
+        var gem = files["masque_gemme"]?.let { gray(decode(it, "masque_gemme", notes)) }
+        if (veins == null || gem == null) {
+            // pas de masques fournis : la lueur améthyste est repérée directement sur le portrait
+            val (autoVeins, autoGem) = glow(bp)
+            if (veins == null) { veins = autoVeins; notes += "Veines repérées automatiquement sur le portrait (pas de nox_masque_veines.png)." }
+            if (gem == null) { gem = autoGem; notes += "Gemme repérée automatiquement sur le portrait (pas de nox_masque_gemme.png)." }
+        }
         var gx = 515f; var gy = 273f
         gem?.let { g ->
             var sx = 0.0; var sy = 0.0; var n = 0
@@ -124,6 +130,7 @@ object PortraitAssets {
         val done = ArrayList<String>()
         for ((name, bytes) in files) {
             if (name == "base" || name.startsWith("masque_")) continue
+            if (name.startsWith("tete_")) { notes += "nox_$name.png ignorée : les mouvements de tête sont calculés en direct."; continue }
             val v = decode(bytes, name, notes)
             val vp = IntArray(W * H).also { v.getPixels(it, 0, W, 0, 0, W, H) }
             val layer = cut(name, bp, vp, notes) ?: continue
@@ -159,6 +166,26 @@ object PortraitAssets {
         if (abs(ratio - W.toFloat() / H) > 0.01f) notes += "nox_$name.png fait ${b.width}×${b.height} au lieu de ${W}×${H} : proportions différentes, l'alignement risque d'être faux."
         else notes += "nox_$name.png fait ${b.width}×${b.height} : remis à ${W}×${H}."
         return Bitmap.createScaledBitmap(b, W, H, true)
+    }
+
+    /**
+     * Lueur améthyste du portrait : pixels nettement plus bleus et rouges que verts, hors iris.
+     * Renvoie (veines, gemme) en niveaux 0–255 ; la gemme est la lueur proche du haut du front.
+     */
+    private fun glow(bp: IntArray): Pair<IntArray, IntArray> {
+        val veins = IntArray(W * H)
+        val gem = IntArray(W * H)
+        for (i in bp.indices) {
+            val c = bp[i]
+            val r = (c shr 16) and 255; val g = (c shr 8) and 255; val b = c and 255
+            if (b < 150 || r - g <= 10) continue
+            val x = i % W; val y = i / W
+            if (EYES.any { (ex, ey) -> (x - ex) * (x - ex) / 2025f + (y - ey) * (y - ey) / 900f < 1f }) continue
+            val v = (((b - g) - 60) * 4).coerceIn(0, 255)
+            veins[i] = v
+            if ((x - 516f) * (x - 516f) / 1600f + (y - 272f) * (y - 272f) / 3025f < 1f) gem[i] = v
+        }
+        return veins to gem
     }
 
     private fun gray(b: Bitmap): IntArray {
