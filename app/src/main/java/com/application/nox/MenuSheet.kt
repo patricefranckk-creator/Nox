@@ -65,6 +65,7 @@ class MenuSheet(private val a: MainActivity) {
             Triple("🧠", "Ce que Nox sait de moi") { a.runText("Qu'est-ce que tu sais sur moi ?") },
             Triple("🧪", "Banc d'essai qualité") { Bench(a).show() },
             Triple("🖼", "Importer le portrait de Nox") { PortraitAssets.pick(a) },
+            Triple("✨", "Importer l'hologramme HQ") { HoloAssets.pick(a) },
         )
         section(body, "Connaissances",
             Triple("🔎", "Contenu de la bibliothèque") { LibraryExplorer(a).show() },

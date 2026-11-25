@@ -1188,6 +1188,14 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             .show()
     }
 
+    fun holoImported(report: String) {
+        val ok = HoloAssets.ready(this)
+        if (ok && ::voicePage.isInitialized) voicePage.holoReady()
+        NoxDialog.Builder(this).setTitle("Hologramme HQ").setIcon("✨").setMessage(report)
+            .setPositiveButton(if (ok) "Voir Nox" else "OK") { _, _ -> if (ok) openVoicePage(false) }
+            .show()
+    }
+
     fun runText(t: String) = send(t)
 
     /** Copie de la conversation en cours (banc d'essai : on remet le modèle dans l'état d'avant). */
@@ -1355,6 +1363,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == ModelsDialog.REQ_IMPORT) ModelsDialog.onImportResult(this, resultCode, data)
         if (requestCode == PortraitAssets.REQ_IMPORT) PortraitAssets.onResult(this, resultCode, data)
+        if (requestCode == HoloAssets.REQ_IMPORT) HoloAssets.onResult(this, resultCode, data)
         if (requestCode == REQ_IMAGE && resultCode == RESULT_OK) data?.data?.let { loadImage(it) }
         if (requestCode == REQ_CAMERA) {
             val uri = cameraUri

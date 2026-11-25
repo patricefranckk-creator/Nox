@@ -32,6 +32,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     val avatar = Avatar3DView(a).apply { contentDescription = "Nox : toucher pour parler" }
     /** Le portrait animé (marionnette 2D d'après les images importées). */
     val portrait = PortraitView(a).apply { contentDescription = "Nox : toucher pour parler" }
+    /** L'hologramme HQ : vidéos par état, importées depuis le pack ZIP. */
+    val holo = HoloView(a).apply { contentDescription = "Nox : toucher pour parler" }
     private val looks = android.widget.LinearLayout(a).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
         background = Ui.rounded(0xFF101A2E.toInt(), a.dp(22).toFloat())
@@ -51,6 +53,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     private val lookFace = lookButton("Visage")
     private val look3d = lookButton("3D")
     private val lookPortrait = lookButton("Portrait")
+    private val lookHolo = lookButton("Holo HQ")
     var isOpen = false; private set
 
     /** Le mot d'état, au-dessus du neurone : couleur de l'onde, fondu à chaque changement, respiration douce. */
@@ -74,7 +77,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         page.addView(face, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
         page.addView(avatar, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
         page.addView(portrait, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
-        looks.addView(lookNeuron); looks.addView(lookFace); looks.addView(look3d); looks.addView(lookPortrait)
+        page.addView(holo, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
+        looks.addView(lookNeuron); looks.addView(lookFace); looks.addView(look3d); looks.addView(lookPortrait); looks.addView(lookHolo)
         page.addView(looks, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = a.dp(36) })
         page.addView(subtitle, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = a.dp(36 + 52 + 18) })
         lookNeuron.setOnClickListener { setLook("neurone") }
@@ -88,11 +92,23 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
             }
         }
         lookPortrait.setOnLongClickListener { PortraitAssets.pick(a); true }
+        lookHolo.setOnClickListener {
+            if (HoloAssets.ready(a)) setLook("holo")
+            else {
+                a.toast("Choisis le ZIP des vidéos de l'hologramme")
+                HoloAssets.pick(a)
+            }
+        }
+        lookHolo.setOnLongClickListener { HoloAssets.pick(a); true }
+        holo.onFail = { msg ->
+            a.toast(msg)
+            setLook("portrait".takeIf { PortraitAssets.ready(a) } ?: "visage")
+        }
         portrait.onFail = { msg ->
             a.toast(msg)
             setLook("visage")
         }
-        for (v in listOf(face, avatar, portrait)) {
+        for (v in listOf(face, avatar, portrait, holo)) {
             v.setOnClickListener { a.onNeuronTap() }
             v.setOnLongClickListener { a.toggleHandsFree(); true }
         }
@@ -132,6 +148,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     fun set(state: NeuronView.State, text: String) {
         neuron.state = state
         FaceBrain.state = state
+        holo.state = state
         neuron.contentDescription = "Nox : $text"
         face.contentDescription = "Nox : $text"
         avatar.contentDescription = "Nox : $text"
@@ -204,11 +221,11 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     private fun setLook(look: String) {
         if (a.prefs.look == look) return
         a.prefs.look = look
-        NoxLog.i("VISAGE", "Apparence : " + when (look) { "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
+        NoxLog.i("VISAGE", "Apparence : " + when (look) { "holo" -> "hologramme HQ"; "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
         applyLook()
     }
 
-    private fun current(): View = when (a.prefs.look) { "portrait" -> portrait; "avatar3d" -> avatar; "visage" -> face; else -> neuron }
+    private fun current(): View = when (a.prefs.look) { "holo" -> holo; "portrait" -> portrait; "avatar3d" -> avatar; "visage" -> face; else -> neuron }
 
     /** Images du portrait importées : on l'affiche et le rendu repart avec elles. */
     fun portraitReady() {
@@ -217,13 +234,27 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         portrait.reload()
     }
 
+    /** Vidéos de l'hologramme importées : on l'affiche avec le nouveau pack. */
+    fun holoReady() {
+        a.prefs.look = "holo"
+        holo.reload()
+        applyLook()
+    }
+
     private fun applyLook() {
-        val look = a.prefs.look.let { if (it == "portrait" && !PortraitAssets.ready(a)) "visage" else it }
+        val look = a.prefs.look.let {
+            when {
+                it == "portrait" && !PortraitAssets.ready(a) -> "visage"
+                it == "holo" && !HoloAssets.ready(a) -> "visage"
+                else -> it
+            }
+        }
+        holo.visibility = if (look == "holo") View.VISIBLE else View.GONE
         portrait.visibility = if (look == "portrait") View.VISIBLE else View.GONE
         face.visibility = if (look == "visage") View.VISIBLE else View.GONE
         avatar.visibility = if (look == "avatar3d") View.VISIBLE else View.GONE
         neuron.visibility = if (look == "neurone") View.VISIBLE else View.GONE
-        for ((v, on) in listOf(lookNeuron to (look == "neurone"), lookFace to (look == "visage"), look3d to (look == "avatar3d"), lookPortrait to (look == "portrait"))) {
+        for ((v, on) in listOf(lookNeuron to (look == "neurone"), lookFace to (look == "visage"), look3d to (look == "avatar3d"), lookPortrait to (look == "portrait"), lookHolo to (look == "holo"))) {
             v.background = if (on) Ui.rounded(0xFF4FA6FF.toInt(), a.dp(20).toFloat()) else null
             v.setTextColor(if (on) 0xFF06101E.toInt() else 0xFFA9B4C9.toInt())
             v.contentDescription = (if (on) "Apparence choisie : " else "Choisir l'apparence : ") + v.text
