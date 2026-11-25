@@ -170,7 +170,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
         // ------------------------------------------------------------ poids des variantes
 
-        private fun has(n: String) = layers.containsKey(n)
+        private fun has(n: String) = layers.containsKey(n.lowercase())
 
         private fun aim(dt: Float) {
             val b = FaceBrain
@@ -230,8 +230,11 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             // variante éteinte (si fournie) quand Nox dort
             if (st == NeuronView.State.OFF) targets["base_eteinte"] = 0.8f
 
+            // les fichiers importés sont rangés en minuscules (bouche_a, bouche_mbp…)
+            val wanted = HashMap<String, Float>()
+            for ((k, v) in targets) wanted[k.lowercase()] = v
             for (name in layers.keys) {
-                val t = targets[name] ?: 0f
+                val t = wanted[name] ?: 0f
                 val rate = when {
                     name.startsWith("bouche_") -> 22f
                     name.startsWith("yeux_") -> 40f
