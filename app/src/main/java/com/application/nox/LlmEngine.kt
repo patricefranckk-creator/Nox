@@ -254,6 +254,18 @@ class LlmEngine(
         return sb.toString()
     }
 
+    /** Texte exact que Gemma reçoit en tête de conversation (consigne, souvenirs, outils), pour le diagnostic. */
+    fun promptPreview(): String {
+        val withSkills = prefs.skillsEnabled && toolsCapable
+        val sb = StringBuilder(systemPrompt(withSkills))
+        if (withSkills) {
+            sb.append("\n\n[Outils décrits à Gemma]")
+            for (k in skills.all) sb.append("\n- ").append(k.name).append(" : ").append(k.description)
+                .append(if (k.params.length() > 0) " · paramètres " + k.params.toString() else "")
+        }
+        return sb.toString()
+    }
+
     /** Résumé sans le modèle : chaque question, et la première phrase de chaque réponse. */
     private fun recap(older: List<ChatMsg>, max: Int): String {
         if (older.isEmpty() || max < 120) return ""

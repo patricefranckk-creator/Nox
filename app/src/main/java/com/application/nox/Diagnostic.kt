@@ -698,6 +698,8 @@ class Diagnostic(private val a: MainActivity) {
                 sb.append('\n')
             }
         }
+        val prompt = try { Nox.engine.promptPreview() } catch (t: Throwable) { "indisponible : ${t.message}" }
+        sb.append("── CE QUE GEMMA REÇOIT (${prompt.length} caractères) ──\n").append(prompt).append("\n\n")
         sb.append("── JOURNAL COMPLET ──\n")
         sb.append(NoxLog.fullText().takeLast(700_000))
         sb.append("\n── FIN DU DIAGNOSTIC ──\n")
