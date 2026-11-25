@@ -149,6 +149,9 @@ object FaceBrain {
     /** La voix s'est tue (fin de phrase ou interruption). */
     @Synchronized fun silent() { talking = false; shapes.clear() }
 
+    /** La voix produit un son en ce moment (faux entre deux phrases et pendant les pauses de ponctuation). */
+    val voiced: Boolean get() = talking && state == NeuronView.State.SPEAKING && viseme != "REPOS"
+
     private fun target(): Pose {
         val p = when (emotion) {
             Emotion.JOIE -> Pose(1f, -3f, 9f, 0f, 0f, 0.82f, 3f, 0.12f)

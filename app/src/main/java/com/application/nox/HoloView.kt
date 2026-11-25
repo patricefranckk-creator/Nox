@@ -29,6 +29,11 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     private var showing: String? = null
     private var switching = false
     private var token = 0
+    private var wasShown = false
+    /** Pendant la parole : l'autre lecteur joue la boucle bouche fermée, montrée dès que la voix se tait. */
+    private var restKey: String? = null
+    private var silentMs = 0f
+    private var lastTick = 0L
 
     init {
         for (s in slots) addView(s.view, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
@@ -58,12 +63,23 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
 
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
         super.onVisibilityChanged(changedView, visibility)
-        if (isShown) sync() else releaseAll()
+        shownChanged()
     }
 
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
-        if (visibility == VISIBLE && isShown) sync() else releaseAll()
+        shownChanged()
+    }
+
+    /** Chaque ouverture de la page vocale rallume l'hologramme : la vidéo de démarrage est rejouée. */
+    private fun shownChanged() {
+        val now = isShown && windowVisibility == VISIBLE
+        if (now && !wasShown) {
+            startupPlayed = false
+            NoxLog.i("HOLO", "Page vocale ouverte : démarrage de l'hologramme")
+        }
+        wasShown = now
+        if (now) sync() else releaseAll()
     }
 
     override fun onDetachedFromWindow() {
@@ -72,8 +88,9 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     }
 
     private fun target(p: HoloAssets.Pack): Pair<HoloAssets.Clip, Float>? {
-        // le démarrage ne retarde jamais une réponse : dès que Nox écoute, réfléchit ou parle, on passe à l'état
-        if (!startupPlayed && state == NeuronView.State.IDLE) p.clip("startup")?.let { return it to it.speed }
+        // l'allumage se joue même si le micro s'ouvre (la vidéo ne retarde rien) ; une réponse l'interrompt
+        if (!startupPlayed && state != NeuronView.State.THINKING && state != NeuronView.State.SPEAKING)
+            p.clip("startup")?.let { return it to it.speed }
         val name = when (state) {
             NeuronView.State.LISTENING -> "listening"
             NeuronView.State.THINKING -> "thinking"
@@ -92,15 +109,26 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         val (clip, speed) = target(p) ?: run { onFail?.invoke("Pack hologramme incomplet : réimporte-le (appui long sur « Hologramme »)"); return }
         if (clip.state != "startup") startupPlayed = true
         val key = clip.id + "@" + speed
-        if (key == showing) return
+        if (key == showing) { keepRest(p); return }
+        // la bouche fermée recouvrait la parole : c'est elle qu'on voit, elle devient le point de départ du fondu
+        if (restKey != null && restKey != key && slots[1 - front].view.alpha > 0.5f) {
+            slots[front].stop(); slots[front].view.alpha = HIDDEN
+            front = 1 - front
+            showing = restKey
+            restKey = null
+        }
         val cur = slots[front]
         // même vidéo, autre vitesse (repos ↔ écoute) : on ajuste sans couper
         if (showing?.substringBeforeLast('@') == clip.id && cur.setSpeed(speed)) { showing = key; return }
         switching = true
         showing = key
+        NoxLog.d("HOLO", "→ ${HoloAssets.LABELS[clip.state] ?: clip.state} (${clip.name})")
         val next = slots[1 - front]
         val t = ++token
-        next.view.alpha = HIDDEN
+        val reuse = restKey == key && next.key == key
+        restKey = null
+        next.view.animate().cancel()
+        if (!reuse) next.view.alpha = HIDDEN
         next.view.bringToFront()
         var faded = false
         fun fade() {
@@ -115,7 +143,9 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
                 sync()
             }.start()
         }
-        next.play(clip, speed,
+        // la boucle bouche fermée tournait déjà sous la parole : on la garde, sans recharger
+        if (reuse) { fade(); return }
+        next.play(clip, speed, key,
             firstFrame = { post { fade() } },
             ended = { post { if (t == token || clip.state == "startup") { startupPlayed = true; if (!switching) sync() } } },
             failed = { msg -> post { if (t == token) { switching = false; showing = null; onFail?.invoke(msg) } } })
@@ -123,10 +153,49 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         postDelayed({ fade() }, FIRST_FRAME_TIMEOUT_MS)
     }
 
+    /**
+     * Pendant la parole, l'autre lecteur fait tourner la boucle d'écoute (bouche fermée) presque invisible.
+     * Dès que la voix marque une pause, elle recouvre la parole ; dès que la voix reprend, elle s'efface.
+     */
+    private fun keepRest(p: HoloAssets.Pack) {
+        if (state != NeuronView.State.SPEAKING || switching) return
+        val rest = (p.clip("listening") ?: p.clip("idle")) ?: return
+        val key = rest.id + "@" + rest.speed
+        val other = slots[1 - front]
+        if (restKey != key) {
+            restKey = key
+            other.view.animate().cancel()
+            other.view.alpha = HIDDEN
+            other.view.bringToFront()
+            other.play(rest, rest.speed, key, firstFrame = {}, ended = {}, failed = { post { restKey = null } })
+        }
+        lastTick = 0L
+        silentMs = 0f
+        postOnAnimation(restTick)
+    }
+
+    private val restTick = object : Runnable {
+        override fun run() {
+            if (restKey == null || state != NeuronView.State.SPEAKING || switching || !isShown) return
+            val now = System.nanoTime()
+            val dt = if (lastTick == 0L) 0.016f else ((now - lastTick) / 1e9f).coerceIn(0f, 0.1f)
+            lastTick = now
+            FaceBrain.step(dt)
+            silentMs = if (FaceBrain.voiced) 0f else silentMs + dt * 1000f
+            val v = slots[1 - front].view
+            // pause de plus de 150 ms : bouche fermée en 120 ms ; la voix reprend : la parole revient en 90 ms
+            val want = if (silentMs > PAUSE_MS) 1f else HIDDEN
+            val rate = if (want > v.alpha) dt / 0.12f else dt / 0.09f
+            v.alpha = if (want > v.alpha) minOf(want, v.alpha + rate) else maxOf(want, v.alpha - rate)
+            postOnAnimation(this)
+        }
+    }
+
     private fun releaseAll() {
         token++
         switching = false
         showing = null
+        restKey = null
         for (s in slots) { s.view.animate().cancel(); s.view.alpha = HIDDEN; s.release() }
     }
 
@@ -153,8 +222,12 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
             }
         }
 
-        fun play(clip: HoloAssets.Clip, speed: Float, firstFrame: () -> Unit, ended: () -> Unit, failed: (String) -> Unit) {
-            val s = surface ?: run { pending = { play(clip, speed, firstFrame, ended, failed) }; return }
+        /** Ce que ce lecteur joue (fichier@vitesse), ou null. */
+        var key: String? = null
+
+        fun play(clip: HoloAssets.Clip, speed: Float, playKey: String, firstFrame: () -> Unit, ended: () -> Unit, failed: (String) -> Unit) {
+            key = playKey
+            val s = surface ?: run { pending = { play(clip, speed, playKey, firstFrame, ended, failed) }; return }
             val p = player ?: MediaPlayer().also { player = it }
             try {
                 p.reset()
@@ -197,11 +270,13 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
 
         fun stop() {
             pending = null
+            key = null
             try { player?.reset() } catch (_: Throwable) {}
         }
 
         fun release() {
             pending = null
+            key = null
             player?.let { try { it.reset(); it.release() } catch (_: Throwable) {} }
             player = null
         }
@@ -216,5 +291,6 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         /** La vidéo de démarrage n'est jouée qu'une fois par lancement de Nox. */
         private var startupPlayed = false
         private const val FIRST_FRAME_TIMEOUT_MS = 600L
+        private const val PAUSE_MS = 150f
     }
 }
