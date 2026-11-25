@@ -104,6 +104,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         private val layers = HashMap<String, Tex>()
         private val weights = HashMap<String, Float>()
         private val targets = HashMap<String, Float>()
+        private var jawFallback = 0f
 
         private var vein = 0.4f
         private var gem = 0.5f
@@ -178,15 +179,18 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             val st = b.state
             // bouche : visèmes des mots prononcés, sinon bouche d'expression
             if (st == NeuronView.State.SPEAKING) {
+                // ouverture continue : la mâchoire descend progressivement (fondu + déformation de bouche_a)
+                val open = ((b.mouthOpen - 0.05f) / 0.85f).coerceIn(0f, 1f)
                 val v = "bouche_" + b.viseme
+                val special = b.viseme !in PLAIN && has(v)
                 when {
-                    b.viseme == "REPOS" && has("bouche_repos") -> targets["bouche_repos"] = 1f
-                    b.viseme.isNotEmpty() && has(v) -> targets[v] = 1f
-                    (b.viseme == "MBP" || b.viseme == "FV") && has("bouche_MBP") -> targets["bouche_MBP"] = if (b.viseme == "MBP") 1f else 0.7f
+                    special -> targets[v] = 1f
                     else -> {
-                        val a = ((b.mouthOpen - 0.12f) / 0.75f).coerceIn(0f, 1f)
-                        if (has("bouche_A")) targets["bouche_A"] = a
-                        if (has("bouche_repos")) targets["bouche_repos"] = (1f - a) * 0.85f
+                        if (has("bouche_a")) targets["bouche_a"] = open
+                        val closed = 1f - open
+                        if ((b.viseme == "MBP" || b.viseme == "FV") && has("bouche_mbp")) targets["bouche_mbp"] = closed * if (b.viseme == "MBP") 1f else 0.6f
+                        else if (has("bouche_repos")) targets["bouche_repos"] = closed * 0.85f
+                        if (!has("bouche_a")) jawFallback = open
                     }
                 }
             } else {
@@ -233,10 +237,11 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             // les fichiers importés sont rangés en minuscules (bouche_a, bouche_mbp…)
             val wanted = HashMap<String, Float>()
             for ((k, v) in targets) wanted[k.lowercase()] = v
+            if (st != NeuronView.State.SPEAKING) jawFallback = 0f
             for (name in layers.keys) {
                 val t = wanted[name] ?: 0f
                 val rate = when {
-                    name.startsWith("bouche_") -> 22f
+                    name.startsWith("bouche_") -> 30f
                     name.startsWith("yeux_") -> 40f
                     else -> 6f
                 }
@@ -273,7 +278,9 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             u1i(compProg, "uTex", 0)
             GLES30.glDisable(GLES30.GL_BLEND)
-            quad(baseTex, 0f, 0f, W, H, 1f)
+            // mâchoire : la bouche fermée descend de t·JAW, la bouche ouverte remonte de (1−t)·JAW, puis fondu
+            val jawT = (weights["bouche_a"] ?: jawFallback).coerceIn(0f, 1f)
+            quad(baseTex, 0f, 0f, W, H, 1f, jawT * JAW_PX)
             GLES30.glEnable(GLES30.GL_BLEND)
             GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
             for (group in GROUPS) {
@@ -281,7 +288,14 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                 // fondu linéaire : alpha_k = w_k / (1 - somme des poids dessinés après)
                 var after = 0f
                 val alphas = names.reversed().map { n -> val w = (weights[n] ?: 0f).coerceIn(0f, 1f); val a = if (after >= 0.999f) 0f else w / (1f - after); after += w; n to a.coerceIn(0f, 1f) }.reversed()
-                for ((n, a) in alphas) if (a > 0.003f) layers[n]?.let { tx -> quad(tx.id, tx.layer.x.toFloat(), tx.layer.y.toFloat(), tx.layer.w.toFloat(), tx.layer.h.toFloat(), a) }
+                for ((n, a) in alphas) if (a > 0.003f) layers[n]?.let { tx ->
+                    val jaw = when (n) {
+                        "bouche_a" -> -(1f - jawT) * JAW_PX
+                        "bouche_repos", "bouche_mbp" -> jawT * JAW_PX
+                        else -> 0f
+                    }
+                    quad(tx.id, tx.layer.x.toFloat(), tx.layer.y.toFloat(), tx.layer.w.toFloat(), tx.layer.h.toFloat(), a, jaw)
+                }
             }
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
@@ -319,8 +333,9 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             if (!logged) { logged = true; NoxLog.i("PORTRAIT", "Première image du portrait dessinée (${w}×$h)") }
         }
 
-        private fun quad(tex: Int, x: Float, y: Float, qw: Float, qh: Float, alpha: Float) {
+        private fun quad(tex: Int, x: Float, y: Float, qw: Float, qh: Float, alpha: Float, jaw: Float = 0f) {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+            u1(compProg, "uJaw", jaw)
             u4(compProg, "uRect", x, y, qw, qh)
             u2(compProg, "uCanvas", W, H)
             u1(compProg, "uAlpha", alpha)
@@ -330,6 +345,9 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
     companion object {
         /** Ordre de dessin : éteinte, sourcils, yeux, bouche (une zone peut toucher la voisine). */
+        /** Descente du menton entre bouche fermée et bouche_a (mesurée sur le lot d'essai). */
+        private const val JAW_PX = 48f
+        private val PLAIN = setOf("", "A", "MBP", "FV", "REPOS")
         private val GROUPS = listOf(listOf("base_eteinte"), listOf("sourcils_"), listOf("yeux_"), listOf("bouche_"))
 
         private const val COMP_VS = """#version 300 es
@@ -349,9 +367,20 @@ precision highp float;
 in vec2 vUv;
 uniform sampler2D uTex;
 uniform float uAlpha;
+uniform float uJaw;
+uniform vec4 uRect;
 out vec4 o;
 void main() {
-    vec4 c = texture(uTex, vUv);
+    vec2 uv = vUv;
+    if (uJaw != 0.0) {
+        // déplacement vertical du menton et de la lèvre inférieure, nul au-dessus de la ligne des lèvres
+        vec2 p = uRect.xy + vUv * uRect.zw;
+        float fx = 1.0 - smoothstep(95.0, 175.0, abs(p.x - 518.0));
+        float fy = smoothstep(655.0, 735.0, p.y) * (1.0 - smoothstep(745.0, 840.0, p.y));
+        vec2 src = p - vec2(0.0, uJaw * fx * fy);
+        uv = clamp((src - uRect.xy) / uRect.zw, 0.0, 1.0);
+    }
+    vec4 c = texture(uTex, uv);
     o = vec4(c.rgb, c.a * uAlpha);
 }"""
 
