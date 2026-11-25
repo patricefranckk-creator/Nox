@@ -124,6 +124,22 @@ object Intents {
         return found.singleOrNull()
     }
 
+    private val LIBRARY = Regex("\\b(?:(?:regarde|cherche|recherche|trouve|verifie|consulte|lis)\\s+)?(?:dans|d'apres|selon|avec|sur)\\s+(?:mes|ma|la|les|tes|ta)\\s+(?:fiches?|bibliotheque|documents?|connaissances|base de connaissances)\\b[ ,:]*")
+    private val LIBRARY_VERB = Regex("^(?:nox[ ,]+)?(?:est-ce que tu peux |tu peux |peux-tu )?(?:regarde|cherche|recherche|trouve|verifie|consulte|lis)\\s+(?:moi\\s+)?")
+
+    /**
+     * Demande explicite de consulter les fiches (« regarde dans mes fiches … », « d'après ma bibliothèque, … »).
+     * Renvoie la question nettoyée à chercher, ou null.
+     */
+    fun libraryQuery(text: String): String? {
+        val f = Text.fold(text.replace('’', '\'')).trim().trimEnd('.', '!', '?', '…')
+        if (!LIBRARY.containsMatchIn(f)) return null
+        val q = LIBRARY_VERB.replace(LIBRARY.replace(f, " "), "")
+            .replace(Regex("^(?:ce que|ce qu'|si |des infos sur |des informations sur |a propos de |au sujet de |sur )"), "")
+            .replace(Regex("\\s+"), " ").trim(' ', ',', ':', '-')
+        return q.ifBlank { null }
+    }
+
     fun lang(name: String): Lang = LANGS.firstOrNull { it.name == name } ?: LANGS.first()
 
     /** Nettoie une note dictée : hésitations retirées, majuscule, point final. */

@@ -361,7 +361,7 @@ class LlmEngine(
      * pertinents existent, ils sont glissés devant le message — Gemma répond avec, sans appel d'outil.
      */
     fun send(text: String, history: List<ChatMsg>, l: StreamListener, image: ByteArray? = null,
-             context: String? = null, contextTitles: List<String>? = null, hint: String? = null) {
+             context: String? = null, contextTitles: List<String>? = null, hint: String? = null, rag: Boolean = true) {
         if (busy) return
         busy = true
         worker.execute {
@@ -380,10 +380,11 @@ class LlmEngine(
             }
             val ragClock = NoxLog.chrono()
             val hits = try {
-                if (prefs.ragAuto) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()
+                if (prefs.ragAuto && rag) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()
             } catch (t: Throwable) { NoxLog.e("RAG", "Recherche automatique", t); emptyList() }
             lastRagMs = ragClock.ms(); lastRagHits = hits.size
             if (hits.isNotEmpty()) NoxLog.i("RAG", "Injection auto ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
+            else if (!rag) NoxLog.d("RAG", "Message parlé : pas de fiches (seulement si demandé)")
             else NoxLog.d("RAG", "Rien d'assez pertinent ($lastRagMs ms)")
             val ctxBlock = library.contextBlock(hits)
             heavyChars = ctxBlock.length
@@ -408,25 +409,14 @@ class LlmEngine(
         heavyChars = 0
         NoxLog.i("OREILLE", "Message vocal envoyé à Gemma : ${durationMs} ms d'audio en ${wavs.size} clip(s), ${wavs.sumOf { it.size } / 1024} Ko")
         worker.execute {
-            // RAG par la voix : la question parlée cherche directement dans la bibliothèque
-            val ragClock = NoxLog.chrono()
-            val hits = try {
-                if (prefs.ragAuto && library.audioSemantic && wavs.isNotEmpty())
-                    library.searchAudio(wavs.first(), k = 3, excludeChatsAfter = skills.conversationStart) else emptyList()
-            } catch (t: Throwable) { NoxLog.e("RAG", "Recherche vocale", t); emptyList() }
-            lastRagMs = ragClock.ms(); lastRagHits = hits.size
-            val ctxBlock = library.contextBlock(hits)
-            heavyChars = ctxBlock.length
-            if (hits.isNotEmpty()) {
-                NoxLog.i("RAG", "Injection vocale ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
-                val titles = hits.map { it.chunk.title }; post { l.onContext(titles) }
-            }
+            // à l'oral, pas de fiches automatiques : Gemma garde sa manière d'être, ce qu'il sait de toi et les échanges récents
+            NoxLog.d("RAG", "Message vocal : pas de fiches automatiques")
             val parts = ArrayList<Content>()
             wavs.forEach { parts += Content.AudioBytes(it) }
-            parts += Content.Text(if (ctxBlock.isEmpty()) AUDIO_INSTRUCTION else ctxBlock + "\n" + AUDIO_INSTRUCTION)
+            parts += Content.Text(AUDIO_INSTRUCTION)
             val msg = Message.user(Contents.of(parts))
             // estimation prudente du coût de l'audio dans le contexte
-            val approxChars = ((durationMs / 1000.0) * AUDIO_TOKENS_PER_S * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length + ctxBlock.length
+            val approxChars = ((durationMs / 1000.0) * AUDIO_TOKENS_PER_S * CHARS_PER_TOKEN).toInt() + AUDIO_INSTRUCTION.length
             submitNow(msg, approxChars, TranscriptExtractor(), history, l, "voix")
         }
     }

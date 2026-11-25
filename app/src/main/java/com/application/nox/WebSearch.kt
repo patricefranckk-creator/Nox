@@ -37,9 +37,13 @@ object WebSearch {
     }
 
     /** Résultats + texte des meilleures pages. Appelé hors du fil principal. */
-    fun search(query: String, pages: Int = 4): List<Result> {
+    /** « … sur Wikipédia » : on interroge Wikipédia directement. */
+    fun wantsWikipedia(message: String) = Regex("wikip[eé]dia", RegexOption.IGNORE_CASE).containsMatchIn(message)
+
+    fun search(query: String, pages: Int = 4, wiki: Boolean = false): List<Result> {
         val clock = NoxLog.chrono()
-        var results = try { duckDuckGo(query) } catch (t: Throwable) { NoxLog.w("WEB", "DuckDuckGo indisponible : ${t.message}"); emptyList() }
+        var results = if (wiki) try { wikipedia(query) } catch (t: Throwable) { NoxLog.w("WEB", "Wikipédia indisponible : ${t.message}"); emptyList() } else emptyList()
+        if (results.isEmpty()) results = try { duckDuckGo(query) } catch (t: Throwable) { NoxLog.w("WEB", "DuckDuckGo indisponible : ${t.message}"); emptyList() }
         if (results.isEmpty()) results = try { wikipedia(query) } catch (t: Throwable) { NoxLog.w("WEB", "Wikipédia indisponible : ${t.message}"); emptyList() }
         // On lit les pages dans l'ordre jusqu'à en avoir `pages` qui donnent vraiment du texte
         var read = 0

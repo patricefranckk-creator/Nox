@@ -54,6 +54,11 @@ fun testIntents(): Int {
         "Tu veux que je l'ajoute à l'agenda ?" to Emotion.QUESTION, "Le rendez-vous est noté pour jeudi." to Emotion.NEUTRE,
         "Ce n'est pas super, mais ça ira." to Emotion.NEUTRE)
     for ((t, want) in emos) if (Emotion.of(t) != want) { bad++; println("✗ émotion « $t » → ${Emotion.of(t)} (attendu $want)") } else println("✓ émotion « $t » → $want")
+    val libs = listOf("Regarde dans mes fiches comment faire la position latérale de sécurité" to "comment faire la position laterale de securite",
+        "D'après ma bibliothèque, c'est quoi le TDAH ?" to "c'est quoi le tdah", "Cherche dans mes notes le code du portail" to null,
+        "Raconte-moi une blague" to null, "Qu'est-ce qu'il y a sur mes documents à propos du solaire" to "qu'est-ce qu'il y a a propos du solaire")
+    for ((t, want) in libs) { val got = Intents.libraryQuery(t)
+        if (got != want) { bad++; println("✗ fiches « $t » → $got (attendu $want)") } else println("✓ fiches « $t » → $got") }
     println("Phrases spéciales : ${cases.size + 4 - bad}/${cases.size + 4} correctes (+ souvenirs, incertitudes, indices, enchaînements)")
     return bad
 }

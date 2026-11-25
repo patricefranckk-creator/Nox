@@ -752,7 +752,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         when {
             wav != null -> { lastLibrary = null; engine.sendAudio(wav, ms, prior, listener) }
             image != null || text == null -> { lastLibrary = null; engine.send(text ?: "", prior, listener, image) }
-            else -> route(text, prior, view, listener)
+            else -> route(text, prior, view, listener, userMsg.voice)
         }
         refreshAction()
     }
@@ -857,10 +857,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         for (i in 0 until list.childCount) (list.getChildAt(i) as? TurnView)?.takeIf { it.msg === m }?.setImage(p)
     }
 
-    private fun route(text: String, prior: List<ChatMsg>, view: TurnView, l: LlmEngine.StreamListener) {
+    /** [spoken] : à l'oral, les fiches ne sont consultées que si on le demande (« regarde dans mes fiches »). */
+    private fun route(text: String, prior: List<ChatMsg>, view: TurnView, l: LlmEngine.StreamListener, spoken: Boolean) {
         routing = true
         Thread {
-            val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l, hint = Intents.toolHint(text)); refreshAction() } }
+            val toModel: () -> Unit = { main.post { routing = false; lastLibrary = null; engine.send(text, prior, l, hint = Intents.toolHint(text), rag = !spoken); refreshAction() } }
             try {
                 val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
                 interp?.let { lang ->
@@ -906,7 +907,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                     }
                     web != null -> {
                         main.post { setMode(NeuronView.State.THINKING, "Recherche sur internet…") }
-                        val results = WebSearch.search(web)
+                        val results = WebSearch.search(web, wiki = WebSearch.wantsWikipedia(text))
                         lastWeb = results.filter { it.text.isNotBlank() }
                         main.post {
                             routing = false
@@ -930,7 +931,24 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
                             refreshAction()
                         }
                     }
-                    prefs.ragFirst && Router.isKnowledgeQuestion(text) -> {
+                    Intents.libraryQuery(text) != null -> {
+                        val q = Intents.libraryQuery(text)!!
+                        val hits = library.search(q, k = 4).filter { !it.chunk.source.startsWith("chat:") }
+                        NoxLog.i("RAG", "Fiches demandées (« $q ») : ${hits.size} trouvée(s)" + hits.joinToString("") { " | ${it.chunk.title.take(30)}" })
+                        main.post {
+                            routing = false
+                            lastLibrary = q to hits
+                            if (hits.isEmpty()) {
+                                voicePage.notice("Rien dans tes fiches sur « $q » · Gemma répond seul")
+                                engine.send(text, prior, l, hint = Intents.toolHint(text), rag = false)
+                            } else {
+                                view.setSources(hits.map { it.chunk.title }.distinct())
+                                engine.send(text, prior, l, null, library.contextBlock(hits), hits.map { it.chunk.title })
+                            }
+                            refreshAction()
+                        }
+                    }
+                    !spoken && prefs.ragFirst && Router.isKnowledgeQuestion(text) -> {
                         val clock = NoxLog.chrono()
                         val hits = library.search(text, k = 4, strict = true)
                         val answer = Router.directAnswer(hits)
