@@ -1191,7 +1191,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     fun holoImported(report: String) {
         val ok = HoloAssets.ready(this)
         if (ok && ::voicePage.isInitialized) voicePage.holoReady()
-        NoxDialog.Builder(this).setTitle("Hologramme HQ").setIcon("✨").setMessage(report)
+        NoxDialog.Builder(this).setTitle("Hologramme").setIcon("✨").setMessage(report)
             .setPositiveButton(if (ok) "Voir Nox" else "OK") { _, _ -> if (ok) openVoicePage(false) }
             .show()
     }

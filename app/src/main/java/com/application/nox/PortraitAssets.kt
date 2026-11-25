@@ -58,8 +58,18 @@ object PortraitAssets {
         data.clipData?.let { c -> for (i in 0 until c.itemCount) uris += c.getItemAt(i).uri }
         data.data?.let { if (it !in uris) uris += it }
         if (uris.isEmpty()) return
-        a.toast("Import du portrait en cours…")
         Thread {
+            // un pack de vidéos choisi ici (bouton Portrait) part vers l'hologramme : le portrait n'en a pas besoin
+            if (HoloAssets.isVideoPack(a, uris)) {
+                NoxLog.i("PORTRAIT", "Pack vidéo choisi depuis le portrait : import vers l'hologramme")
+                val report = try { HoloAssets.importPack(a, uris) } catch (t: Throwable) {
+                    NoxLog.e("HOLO", "Import de l'hologramme impossible", t)
+                    "Import impossible : ${t.message}"
+                }
+                a.runOnUiThread { a.holoImported(report) }
+                return@Thread
+            }
+            a.runOnUiThread { a.toast("Import du portrait en cours…") }
             val report = try { import(a, uris) } catch (t: Throwable) {
                 NoxLog.e("PORTRAIT", "Import du portrait impossible", t)
                 "Import impossible : ${t.message}"

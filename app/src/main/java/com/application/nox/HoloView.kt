@@ -90,7 +90,7 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     private fun sync() {
         if (switching) return
         val p = pack ?: HoloAssets.load(context).also { pack = it }
-        val (clip, speed) = target(p) ?: run { onFail?.invoke("Pack hologramme incomplet : réimporte-le (appui long sur « Holo HQ »)"); return }
+        val (clip, speed) = target(p) ?: run { onFail?.invoke("Pack hologramme incomplet : réimporte-le (appui long sur « Hologramme »)"); return }
         if (clip.state != "startup") startupPlayed = true
         val key = clip.id + "@" + speed
         if (key == showing) return

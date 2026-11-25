@@ -65,7 +65,7 @@ object HoloAssets {
         if (uris.isEmpty()) return
         a.toast("Import de l'hologramme en cours…")
         Thread {
-            val report = try { import(a, uris) } catch (t: Throwable) {
+            val report = try { importPack(a, uris) } catch (t: Throwable) {
                 NoxLog.e("HOLO", "Import de l'hologramme impossible", t)
                 "Import impossible : ${t.message}"
             }
@@ -153,7 +153,32 @@ object HoloAssets {
 
     // ------------------------------------------------------------ import
 
-    private fun import(ctx: Context, uris: List<Uri>): String {
+    /** Ce qui a été choisi contient des vidéos .mp4 (directement ou dans un ZIP) et aucune image .png. */
+    fun isVideoPack(ctx: Context, uris: List<Uri>): Boolean {
+        var mp4 = false; var png = false
+        for (u in uris) {
+            val name = displayName(ctx, u).lowercase()
+            when {
+                name.endsWith(".mp4") -> mp4 = true
+                name.endsWith(".png") -> png = true
+                name.endsWith(".zip") -> runCatching {
+                    ctx.contentResolver.openInputStream(u)?.use { input ->
+                        ZipInputStream(input.buffered()).use { z ->
+                            while (true) {
+                                val n = (z.nextEntry ?: break).name.lowercase()
+                                if (n.endsWith(".mp4")) mp4 = true
+                                if (n.endsWith(".png")) png = true
+                                if (png) break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return mp4 && !png
+    }
+
+    fun importPack(ctx: Context, uris: List<Uri>): String {
         val c = NoxLog.chrono()
         val tmp = File(ctx.cacheDir, "holo_import").apply { deleteRecursively(); mkdirs() }
         val got = ArrayList<String>()
@@ -207,7 +232,7 @@ object HoloAssets {
         if (File(out, "manifest.json").exists()) lines += "Manifeste lu · transition ${pack.transitionMs} ms"
         else notes += "Pas de manifeste JSON : réglages par défaut (transition ${pack.transitionMs} ms)."
         NoxLog.i("HOLO", "Hologramme importé en ${c.ms()} ms")
-        return (lines + notes).joinToString("\n") + "\n\nTouche « Holo HQ » dans la page vocale pour le voir."
+        return (lines + notes).joinToString("\n") + "\n\nTouche « Hologramme » dans la page vocale pour le voir."
     }
 
     class Info(val w: Int, val h: Int, val ms: Long, val mime: String, val hardware: Boolean, val text: String)

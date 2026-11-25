@@ -32,7 +32,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     val avatar = Avatar3DView(a).apply { contentDescription = "Nox : toucher pour parler" }
     /** Le portrait animé (marionnette 2D d'après les images importées). */
     val portrait = PortraitView(a).apply { contentDescription = "Nox : toucher pour parler" }
-    /** L'hologramme HQ : vidéos par état, importées depuis le pack ZIP. */
+    /** L'hologramme : vidéos par état (pack livré dans l'appli, remplaçable), indépendant du portrait. */
     val holo = HoloView(a).apply { contentDescription = "Nox : toucher pour parler" }
     private val looks = android.widget.LinearLayout(a).apply {
         orientation = android.widget.LinearLayout.HORIZONTAL
@@ -53,15 +53,17 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     private val lookFace = lookButton("Visage")
     private val look3d = lookButton("3D")
     private val lookPortrait = lookButton("Portrait")
-    private val lookHolo = lookButton("Holo HQ")
+    private val lookHolo = lookButton("Hologramme")
     var isOpen = false; private set
 
     /** Le mot d'état, au-dessus du neurone : couleur de l'onde, fondu à chaque changement, respiration douce. */
     private val word = TextView(a).apply {
         gravity = Gravity.CENTER
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
+        maxLines = 1
+        setAutoSizeTextTypeUniformWithConfiguration(14, 26, 1, TypedValue.COMPLEX_UNIT_SP)
         typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
         letterSpacing = 0.18f
+        setPadding(a.dp(16), 0, a.dp(16), 0)
         setShadowLayer(a.dp(18).toFloat(), 0f, 0f, 0x664FA6FF)
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
@@ -79,8 +81,14 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         page.addView(portrait, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
         page.addView(holo, FrameLayout.LayoutParams(size, (size * 1.2f).toInt(), android.view.Gravity.CENTER))
         looks.addView(lookNeuron); looks.addView(lookFace); looks.addView(look3d); looks.addView(lookPortrait); looks.addView(lookHolo)
-        page.addView(looks, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = a.dp(36) })
+        page.addView(looks, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = a.dp(36); leftMargin = a.dp(12); rightMargin = a.dp(12) })
         page.addView(subtitle, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = a.dp(36 + 52 + 18) })
+        // les sous-titres restent toujours au-dessus des onglets, quelle que soit la taille de police
+        looks.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val lp = subtitle.layoutParams as FrameLayout.LayoutParams
+            val want = (bottom - top) + a.dp(36) + a.dp(14)
+            if (lp.bottomMargin != want) { lp.bottomMargin = want; subtitle.layoutParams = lp }
+        }
         lookNeuron.setOnClickListener { setLook("neurone") }
         lookFace.setOnClickListener { setLook("visage") }
         look3d.setOnClickListener { setLook("avatar3d") }
@@ -118,7 +126,15 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         }
         applyLook()
         val top = ((a.resources.displayMetrics.heightPixels - size * 1.2f).toInt() / 2 - a.dp(30)).coerceAtLeast(a.dp(48))
-        page.addView(word, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { topMargin = top })
+        page.addView(word, FrameLayout.LayoutParams(-1, a.dp(40), Gravity.TOP).apply { topMargin = top })
+        // le mot d'état se pose juste au-dessus du visage, sans le recouvrir
+        page.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            val faceTop = current().top
+            if (faceTop <= 0) return@addOnLayoutChangeListener
+            val lp = word.layoutParams as FrameLayout.LayoutParams
+            val want = (faceTop - lp.height - a.dp(4)).coerceAtLeast(a.dp(28))
+            if (lp.topMargin != want) word.post { lp.topMargin = want; word.layoutParams = lp }
+        }
         showWord(NeuronView.State.IDLE)
         neuron.setOnClickListener { a.onNeuronTap() }
         neuron.setOnLongClickListener { a.toggleHandsFree(); true }
@@ -208,20 +224,23 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
 
     // ------------------------------------------------------------ neurone ou visage
 
+    /** Cinq onglets qui tiennent toujours sur une ligne : largeur partagée, texte réduit si la police système est grande. */
     private fun lookButton(label: String) = TextView(a).apply {
         text = label
         gravity = Gravity.CENTER
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         typeface = Ui.BOLD
-        minHeight = a.dp(44); minWidth = a.dp(72)
-        setPadding(a.dp(12), 0, a.dp(12), 0)
+        maxLines = 1
+        minHeight = a.dp(44)
+        setPadding(a.dp(4), 0, a.dp(4), 0)
+        setAutoSizeTextTypeUniformWithConfiguration(9, 14, 1, TypedValue.COMPLEX_UNIT_SP)
+        layoutParams = android.widget.LinearLayout.LayoutParams(0, a.dp(44), 1f)
         isClickable = true; isFocusable = true
     }
 
     private fun setLook(look: String) {
         if (a.prefs.look == look) return
         a.prefs.look = look
-        NoxLog.i("VISAGE", "Apparence : " + when (look) { "holo" -> "hologramme HQ"; "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
+        NoxLog.i("VISAGE", "Apparence : " + when (look) { "holo" -> "hologramme"; "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
         applyLook()
     }
 
