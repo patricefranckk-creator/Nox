@@ -1,7 +1,6 @@
 package com.application.nox
 
 import android.content.Context
-import android.graphics.Color
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.view.Gravity
@@ -11,7 +10,7 @@ import android.view.View
 import android.widget.FrameLayout
 
 /**
- * Mode « Hologramme HQ » : les vidéos du pack importé, une par état de Nox (démarrage, écoute,
+ * Mode « Hologramme » : les vidéos du pack (livré dans l'appli ou importé), une par état de Nox (démarrage, écoute,
  * réflexion, parole). Deux lecteurs seulement : celui qu'on voit et celui qui prépare l'état suivant,
  * fondu de l'un à l'autre. Décodage matériel par MediaPlayer, son des vidéos coupé, tout est libéré
  * dès que la vue est cachée. Rien ne passe par Gemma.
@@ -32,8 +31,7 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     private var token = 0
 
     init {
-        setBackgroundColor(Color.BLACK)
-        for (s in slots) addView(s.view, LayoutParams(0, 0, Gravity.CENTER))
+        for (s in slots) addView(s.view, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
     }
 
     /** Mode hologramme choisi : la vidéo de démarrage est rejouée une fois. */
@@ -50,11 +48,12 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         if (isShown) sync()
     }
 
-    override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-        super.onSizeChanged(w, h, ow, oh)
-        // vidéo carrée : le plus grand carré qui tient, centré, sans déformation, bords noirs
-        val side = minOf(w, h)
-        for (s in slots) s.view.layoutParams = LayoutParams(side, side, Gravity.CENTER)
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        // vidéo carrée : le plus grand carré qui tient, centré (gravité des enfants), sans déformation, bords noirs
+        val side = minOf(measuredWidth, measuredHeight)
+        val spec = MeasureSpec.makeMeasureSpec(side, MeasureSpec.EXACTLY)
+        for (s in slots) s.view.measure(spec, spec)
     }
 
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
@@ -101,7 +100,7 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         showing = key
         val next = slots[1 - front]
         val t = ++token
-        next.view.alpha = 0f
+        next.view.alpha = HIDDEN
         next.view.bringToFront()
         var faded = false
         fun fade() {
@@ -110,7 +109,7 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
             next.view.animate().alpha(1f).setDuration(p.transitionMs).withEndAction {
                 if (t != token) return@withEndAction
                 cur.stop()
-                cur.view.alpha = 0f
+                cur.view.alpha = HIDDEN
                 front = 1 - front
                 switching = false
                 sync()
@@ -128,12 +127,12 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         token++
         switching = false
         showing = null
-        for (s in slots) { s.view.animate().cancel(); s.view.alpha = 0f; s.release() }
+        for (s in slots) { s.view.animate().cancel(); s.view.alpha = HIDDEN; s.release() }
     }
 
     /** Un lecteur : sa surface d'affichage et son MediaPlayer (réutilisé, jamais plus de deux). */
     private inner class Slot {
-        val view = TextureView(context).apply { isOpaque = false; alpha = 0f }
+        val view = TextureView(context).apply { isOpaque = false; alpha = HIDDEN }
         private var surface: Surface? = null
         private var player: MediaPlayer? = null
         private var pending: (() -> Unit)? = null
@@ -209,6 +208,11 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     }
 
     companion object {
+        /**
+         * Lecteur en attente : presque invisible mais jamais à 0, sinon Android ne le dessine pas et sa
+         * surface vidéo n'est jamais créée (la vidéo suivante ne pourrait pas démarrer).
+         */
+        private const val HIDDEN = 0.01f
         /** La vidéo de démarrage n'est jouée qu'une fois par lancement de Nox. */
         private var startupPlayed = false
         private const val FIRST_FRAME_TIMEOUT_MS = 600L

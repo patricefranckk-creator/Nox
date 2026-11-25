@@ -71,6 +71,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         duration = 1400; repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE
     }
     private var shown: NeuronView.State? = null
+    private val pageBackground = page.background
+    private val holoBackground = android.graphics.drawable.ColorDrawable(android.graphics.Color.BLACK)
     private val backCb by lazy { android.window.OnBackInvokedCallback { a.closeVoicePage() } }
 
     init {
@@ -269,6 +271,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
             }
         }
         holo.visibility = if (look == "holo") View.VISIBLE else View.GONE
+        // fond noir pur avec l'hologramme : les vidéos sont sur noir, aucun bord de carré ne doit se voir
+        page.background = if (look == "holo") holoBackground else pageBackground
         portrait.visibility = if (look == "portrait") View.VISIBLE else View.GONE
         face.visibility = if (look == "visage") View.VISIBLE else View.GONE
         avatar.visibility = if (look == "avatar3d") View.VISIBLE else View.GONE
