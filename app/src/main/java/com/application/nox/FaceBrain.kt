@@ -38,6 +38,8 @@ object FaceBrain {
     var sway = 0f; private set
 
     private val shapes = ArrayDeque<Shape>()
+    private var openVel = 0f
+    private val VOWELS = setOf("A", "O", "OU", "E", "EU", "I")
     private var shapeLeft = 0f
     private var lastWordAt = 0L
     private var talking = false
@@ -81,9 +83,26 @@ object FaceBrain {
             }
         }
         flush()
+        coarticulate(out)
         shapes.clear()
         shapes.addAll(out)
         shapeLeft = 0f
+    }
+
+    /**
+     * Coarticulation : en parlant, la bouche ne se referme pas entre deux voyelles. Les consonnes qui ne
+     * touchent pas les lèvres gardent une bonne part de l'ouverture des voyelles voisines.
+     */
+    private fun coarticulate(list: ArrayList<Shape>) {
+        for (i in list.indices) {
+            val s = list[i]
+            if (s.id in VOWELS || s.id == "MBP" || s.id == "REPOS") continue
+            val prev = (i - 1 downTo 0).firstOrNull { list[it].id in VOWELS }?.let { list[it].open }
+            val next = (i + 1 until list.size).firstOrNull { list[it].id in VOWELS }?.let { list[it].open }
+            val around = listOfNotNull(prev, next).let { if (it.isEmpty()) s.open else it.average().toFloat() }
+            val keep = if (s.id == "FV") 0.35f else 0.6f
+            list[i] = Shape(s.id, max(s.open, around * keep), s.width, s.ms)
+        }
     }
 
     /** Formes de bouche d'un mot (visèmes du français), son par son. */
@@ -202,8 +221,16 @@ object FaceBrain {
             val syl = abs(sin(t * 10.5f)) * 0.6f + abs(sin(t * 6.7f + 1f)) * 0.4f
             wantOpen = max(wantOpen, max(0f, syl - 0.2f) * 0.8f)
         }
+        // ressort amorti : la mâchoire accélère et freine comme une vraie, sans à-coups ni rebond
+        val w = 22f
+        var left = min(dt, 0.1f)
+        while (left > 0f) {
+            val h = min(left, 0.01f)
+            openVel += (w * w * (wantOpen - mouthOpen) - 2f * w * openVel) * h
+            mouthOpen = (mouthOpen + openVel * h).coerceIn(0f, 1.1f)
+            left -= h
+        }
         val m = min(1f, dt * 18f)
-        mouthOpen += (wantOpen - mouthOpen) * m
         mouthWidth += (wantWidth - mouthWidth) * m
     }
 }

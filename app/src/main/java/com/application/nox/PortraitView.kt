@@ -275,11 +275,11 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             // les fichiers importés sont rangés en minuscules (bouche_a, bouche_mbp…)
             val wanted = HashMap<String, Float>()
             for ((k, v) in targets) wanted[k.lowercase()] = v
-            jawS += (jawTarget - jawS) * min(1f, dt * 30f)
+            jawS += (jawTarget - jawS) * min(1f, dt * 60f)
             for (name in layers.keys) {
                 val t = wanted[name] ?: 0f
                 val rate = when {
-                    name.startsWith("bouche_") -> 30f
+                    name.startsWith("bouche_") -> 60f
                     name.startsWith("yeux_") -> 40f
                     else -> 6f
                 }
