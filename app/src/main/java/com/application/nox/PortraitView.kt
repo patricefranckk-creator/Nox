@@ -104,7 +104,8 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         private val layers = HashMap<String, Tex>()
         private val weights = HashMap<String, Float>()
         private val targets = HashMap<String, Float>()
-        private var jawFallback = 0f
+        private var jawTarget = 0f
+        private var jawS = 0f
 
         private var vein = 0.4f
         private var gem = 0.5f
@@ -178,6 +179,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             targets.clear()
             val st = b.state
             // bouche : visèmes des mots prononcés, sinon bouche d'expression
+            jawTarget = 0f
             if (st == NeuronView.State.SPEAKING) {
                 // ouverture continue : la mâchoire descend progressivement (fondu + déformation de bouche_a)
                 val open = ((b.mouthOpen - 0.05f) / 0.85f).coerceIn(0f, 1f)
@@ -186,11 +188,11 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                 when {
                     special -> targets[v] = 1f
                     else -> {
-                        if (has("bouche_a")) targets["bouche_a"] = open
+                        jawTarget = open
+                        if (has("bouche_a")) targets["bouche_a"] = ease(open)
                         val closed = 1f - open
                         if ((b.viseme == "MBP" || b.viseme == "FV") && has("bouche_mbp")) targets["bouche_mbp"] = closed * if (b.viseme == "MBP") 1f else 0.6f
                         else if (has("bouche_repos")) targets["bouche_repos"] = closed * 0.85f
-                        if (!has("bouche_a")) jawFallback = open
                     }
                 }
             } else {
@@ -207,7 +209,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
                 }
                 when {
                     has(name) -> targets[name] = w
-                    alt != null && has(alt) -> targets[alt] = if (alt == "bouche_A") 0.45f else 0.7f
+                    alt != null && has(alt) -> if (alt == "bouche_A") { jawTarget = 0.5f; targets[alt] = ease(0.5f) } else targets[alt] = 0.7f
                 }
             }
             // yeux : clignement et veille, puis émotion
@@ -237,7 +239,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             // les fichiers importés sont rangés en minuscules (bouche_a, bouche_mbp…)
             val wanted = HashMap<String, Float>()
             for ((k, v) in targets) wanted[k.lowercase()] = v
-            if (st != NeuronView.State.SPEAKING) jawFallback = 0f
+            jawS += (jawTarget - jawS) * min(1f, dt * 30f)
             for (name in layers.keys) {
                 val t = wanted[name] ?: 0f
                 val rate = when {
@@ -279,7 +281,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
             u1i(compProg, "uTex", 0)
             GLES30.glDisable(GLES30.GL_BLEND)
             // mâchoire : la bouche fermée descend de t·JAW, la bouche ouverte remonte de (1−t)·JAW, puis fondu
-            val jawT = (weights["bouche_a"] ?: jawFallback).coerceIn(0f, 1f)
+            val jawT = jawS.coerceIn(0f, 1f)
             quad(baseTex, 0f, 0f, W, H, 1f, jawT * JAW_PX)
             GLES30.glEnable(GLES30.GL_BLEND)
             GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
@@ -347,6 +349,8 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
         /** Ordre de dessin : éteinte, sourcils, yeux, bouche (une zone peut toucher la voisine). */
         /** Descente du menton entre bouche fermée et bouche_a (mesurée sur le lot d'essai). */
         private const val JAW_PX = 48f
+        /** Le fondu vers bouche_a se fait au milieu du mouvement : avant, c'est la déformation qui ouvre. */
+        private fun ease(t: Float): Float { val x = ((t - 0.3f) / 0.3f).coerceIn(0f, 1f); return x * x * (3f - 2f * x) }
         private val PLAIN = setOf("", "A", "MBP", "FV", "REPOS")
         private val GROUPS = listOf(listOf("base_eteinte"), listOf("sourcils_"), listOf("yeux_"), listOf("bouche_"))
 
@@ -376,7 +380,7 @@ void main() {
         // déplacement vertical du menton et de la lèvre inférieure, nul au-dessus de la ligne des lèvres
         vec2 p = uRect.xy + vUv * uRect.zw;
         float fx = 1.0 - smoothstep(95.0, 175.0, abs(p.x - 518.0));
-        float fy = smoothstep(655.0, 735.0, p.y) * (1.0 - smoothstep(745.0, 840.0, p.y));
+        float fy = smoothstep(655.0, 735.0, p.y) * (1.0 - clamp((p.y - 735.0) / 65.0, 0.0, 1.0));
         vec2 src = p - vec2(0.0, uJaw * fx * fy);
         uv = clamp((src - uRect.xy) / uRect.zw, 0.0, 1.0);
     }
