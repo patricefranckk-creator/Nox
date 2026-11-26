@@ -172,9 +172,9 @@ object HelpDialog {
         }
 
         sec("Parler à Nox")
-        item("Le micro, en bas à droite", "Ouvre la page vocale : le grand neurone devient vert, Nox t'écoute. Touche le neurone quand tu as fini (sinon il détecte ton silence). Pendant qu'il parle ou réfléchit, toucher le neurone l'interrompt.")
+        item("Le micro, en bas à droite", "Ouvre la page vocale : le médaillon de Nox s'entoure de vert, Nox t'écoute. Touche Nox quand tu as fini (sinon il détecte ton silence). Pendant qu'il parle ou réfléchit, toucher Nox l'interrompt.")
         item("Bouton power", "Appui long sur le bouton marche/arrêt, de n'importe où (même écran verrouillé) : Nox s'ouvre directement à l'écoute. À activer une fois dans Menu › Autorisations › Bouton power.")
-        item("Appui long sur le neurone", "Mode mains libres : Nox réécoute après chaque réponse, l'écran reste allumé.")
+        item("Appui long sur Nox", "Mode mains libres : Nox réécoute après chaque réponse, l'écran reste allumé.")
         item("Écrire", "« ou écris ici… » en bas : la flèche envoie, le carré arrête la réponse.")
         item("Photo et galerie", "L'appareil photo ou une image de la galerie, puis ta question : « qu'est-ce que c'est ? », « lis ce document »…")
         item("Sous chaque message", "Copier, relire à voix haute, ou modifier ce que tu as dit. Les relances bleues s'envoient d'un toucher.")
@@ -195,7 +195,7 @@ object HelpDialog {
         item("Contenu de la bibliothèque", "Menu › Contenu de la bibliothèque : toutes les fiches, documents, listes et conversations que Nox peut relire, chaque extrait tel quel, son état de vectorisation, et « Tester une recherche » pour voir ce que Nox retrouverait pour une question.")
 
         sec("L'écran")
-        item("Le neurone en haut à gauche", "Ouvre le menu (favoris, profil, mémoire, documents, modèles, réglages, journal…). Son anneau suit l'état de Nox.")
+        item("Le visage de Nox en haut à gauche", "Ouvre le menu (favoris, profil, mémoire, documents, modèles, réglages, journal…). Son anneau suit l'état de Nox.")
         item("Le bouton jauge", "RAM, Nox, CPU, GPU et batterie en direct ; « Détail RAM » et « Journal » en bas du panneau.")
         item("Journal de bord", "Performances (temps avant le 1er mot, vitesse, RAG, outils) et erreurs. Bouton Partager pour me l'envoyer.")
         item("Diagnostic complet", "Menu → Diagnostic complet : Nox teste tout (modèle, réponses, bibliothèque, web, voix, pilotage…) et écrit un rapport dans Téléchargements/Nox à m'envoyer.")

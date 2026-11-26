@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Rect
@@ -17,8 +16,9 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Le neurone de Nox (l'œuvre de Lia, teintée) : respire au repos, change de teinte selon l'état
- * (écoute verte, réflexion bleue avec orbite, parole ambrée), anneaux et halo réactifs à la voix.
+ * Le médaillon de Nox (son visage holographique) : respire au repos ; l'anneau, le halo et les ondes
+ * prennent la couleur de l'état (écoute verte, réflexion bleue avec orbite, parole ambrée) et réagissent à la voix.
+ * Le visage lui-même garde ses vraies couleurs.
  */
 class NeuronView(ctx: Context, private val style: Style) : View(ctx) {
 
@@ -36,8 +36,7 @@ class NeuronView(ctx: Context, private val style: Style) : View(ctx) {
         set(v) { if (field != v) { fromHue = curHue; field = v; blend = 0f; invalidate() } }
 
     private val bmp: Bitmap? = run {
-        val id = ctx.resources.getIdentifier("neurone", "drawable", ctx.packageName)
-        if (id == 0) null else BitmapFactory.decodeResource(ctx.resources, id)
+        BitmapFactory.decodeResource(ctx.resources, R.drawable.nox_visage)
     }
     private val src = Rect()
     private val dst = RectF()
@@ -48,7 +47,6 @@ class NeuronView(ctx: Context, private val style: Style) : View(ctx) {
 
     private var fromHue = 0f
     private var curHue = 0f
-    private var lastHue = Float.NaN
     private var blend = 1f
     private var level = 0f
     private var targetLevel = 0f
@@ -138,7 +136,6 @@ class NeuronView(ctx: Context, private val style: Style) : View(ctx) {
 
     private fun drawNeuron(c: Canvas, cx: Float, cy: Float, half: Float) {
         val b = bmp ?: return
-        if (curHue != lastHue) { imgPaint.colorFilter = ColorMatrixColorFilter(hueMatrix(curHue)); lastHue = curHue }
         src.set(0, 0, b.width, b.height)
         dst.set(cx - half, cy - half, cx + half, cy + half)
         c.drawBitmap(b, src, dst, imgPaint)

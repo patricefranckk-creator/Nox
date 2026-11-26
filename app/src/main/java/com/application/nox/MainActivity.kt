@@ -510,8 +510,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private fun idleHint() = when {
         !engine.ready -> ""
         interp != null -> "Interprète français ⇄ ${interp?.name} · ${if (interpFromForeign) "j'écoute en ${interp?.name}" else "j'écoute en français"} · dis « stop »"
-        prefs.handsFree -> "Mains libres actif · touche le neurone pour parler"
-        else -> "Touche le neurone pour parler · appui long : mains libres"
+        prefs.handsFree -> "Mains libres actif · touche Nox pour parler"
+        else -> "Touche Nox pour parler · appui long : mains libres"
     }
 
     private fun refreshAction() {
@@ -1304,11 +1304,11 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
     // ---- oreille native (AudioCapture)
 
-    override fun onCaptureStarted() = setMode(NeuronView.State.LISTENING, "Je t'écoute… touche le neurone quand tu as fini")
+    override fun onCaptureStarted() = setMode(NeuronView.State.LISTENING, "Je t'écoute… touche Nox quand tu as fini")
     override fun onCaptureLevel(level: Float) { voicePage.setLevel(level); neuron.setLevel(level) }
     override fun onCaptureElapsed(speechMs: Long) {
         val s = speechMs / 1000
-        voicePage.caption(String.format(java.util.Locale.FRANCE, "Je t'écoute… %d:%02d · touche le neurone quand tu as fini", s / 60, s % 60))
+        voicePage.caption(String.format(java.util.Locale.FRANCE, "Je t'écoute… %d:%02d · touche Nox quand tu as fini", s / 60, s % 60))
     }
 
     override fun onCaptured(wav: List<ByteArray>, durationMs: Long) {
@@ -1355,7 +1355,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     // ================================================================ voix — sortie
 
     override fun onSpeakingChanged(speaking: Boolean) {
-        if (speaking) setMode(NeuronView.State.SPEAKING, "Nox parle · touche le neurone pour l'interrompre")
+        if (speaking) setMode(NeuronView.State.SPEAKING, "Nox parle · touche Nox pour l'interrompre")
         else if (!engine.busy && !listeningNow) setMode(NeuronView.State.IDLE, idleHint())
         refreshAction()
     }

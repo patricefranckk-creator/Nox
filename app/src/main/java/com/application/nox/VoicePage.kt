@@ -51,7 +51,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         setPadding(a.dp(24), 0, a.dp(24), 0)
         accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
-    private val lookNeuron = lookButton("Neurone")
+    private val lookNeuron = lookButton("Médaillon")
     private val lookFace = lookButton("Visage")
     private val look3d = lookButton("3D")
     private val lookPortrait = lookButton("Portrait")
@@ -246,7 +246,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     private fun setLook(look: String) {
         if (a.prefs.look == look) return
         a.prefs.look = look
-        NoxLog.i("VISAGE", "Apparence : " + when (look) { "holo" -> "hologramme"; "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "neurone" })
+        NoxLog.i("VISAGE", "Apparence : " + when (look) { "holo" -> "hologramme"; "portrait" -> "portrait animé"; "avatar3d" -> "avatar 3D"; "visage" -> "visage 2,5D"; else -> "médaillon" })
         applyLook()
     }
 

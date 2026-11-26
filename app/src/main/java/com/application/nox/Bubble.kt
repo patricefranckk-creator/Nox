@@ -73,7 +73,7 @@ object Bubble {
             contentDescription = "Nox : touche pour parler, appui long pour ouvrir"
         }
         val img = ImageView(c).apply {
-            setImageResource(R.drawable.neurone)
+            setImageResource(R.drawable.nox_visage)
             scaleType = ImageView.ScaleType.CENTER_CROP
             outlineProvider = object : ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: Outline) = outline.setOval(0, 0, view.width, view.height)

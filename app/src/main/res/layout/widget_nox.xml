@@ -12,7 +12,7 @@
         android:layout_width="56dp"
         android:layout_height="56dp"
         android:contentDescription="@string/widget_label"
-        android:src="@drawable/neurone" />
+        android:src="@drawable/nox_visage" />
 
     <TextView
         android:layout_width="wrap_content"
