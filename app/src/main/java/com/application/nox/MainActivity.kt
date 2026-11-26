@@ -390,25 +390,22 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         toast(if (prefs.autoSpeak) "Nox lit ses réponses à voix haute" else "Voix coupée : Nox répond par écrit")
     }
 
-    /** Écran de démarrage : le neurone sur fond de nuit, le nom, et la mention du créateur. */
+    /** Écran de démarrage : l'allumage de l'hologramme (vidéo jouée une fois), le nom, et la mention du créateur. */
     private fun showSplash() {
         val decor = window.decorView as FrameLayout
         val splash = FrameLayout(this).apply {
-            background = android.graphics.drawable.GradientDrawable().apply {
-                gradientType = android.graphics.drawable.GradientDrawable.RADIAL_GRADIENT
-                colors = intArrayOf(0xFF120A2A.toInt(), 0xFF020409.toInt())
-                gradientRadius = resources.displayMetrics.heightPixels * 0.55f
-                setGradientCenter(0.5f, 0.42f)
-            }
+            // noir pur : le fond de la vidéo se confond avec l'écran
+            setBackgroundColor(0xFF000000.toInt())
             isClickable = true
         }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
-        val n = NeuronView(this, NeuronView.Style.SPLASH)
-        col.addView(n, LinearLayout.LayoutParams(dp(190), dp(190)))
+        val side = minOf(resources.displayMetrics.widthPixels, (resources.displayMetrics.heightPixels * 0.55f).toInt())
+        val intro = SplashVideo(this)
+        col.addView(intro.view, LinearLayout.LayoutParams(side, side))
         col.addView(TextView(this).apply {
             text = "Nox"; setTextColor(Ui.TEXT); setTextSize(TypedValue.COMPLEX_UNIT_SP, 40f); typeface = Ui.BLACK
             letterSpacing = 0.03f; gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(20) })
+        }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
         col.addView(TextView(this).apply {
             text = "réveil du modèle…"; setTextColor(0xFF8E97AB.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f); typeface = Ui.MEDIUM
             gravity = Gravity.CENTER
@@ -435,16 +432,16 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(4) })
         splash.addView(foot, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = dp(40) })
         decor.addView(splash, FrameLayout.LayoutParams(-1, -1))
-        n.scaleX = 0.6f; n.scaleY = 0.6f; n.alpha = 0f
-        n.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(650).start()
         var gone = false
         val hide = {
             if (!gone) {
                 gone = true
-                splash.animate().alpha(0f).setDuration(320).withEndAction { loading.cancel(); decor.removeView(splash) }.start()
+                splash.animate().alpha(0f).setDuration(320).withEndAction { loading.cancel(); intro.release(); decor.removeView(splash) }.start()
             }
         }
         splash.setOnClickListener { hide() }
+        // l'hologramme s'allume (3 s) puis reste allumé sur sa dernière image jusqu'à la fin du démarrage
+        intro.play()
         main.postDelayed({ hide() }, SPLASH_MS)
     }
 
