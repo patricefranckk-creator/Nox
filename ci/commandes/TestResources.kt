@@ -1,4 +1,5 @@
-import com.application.nox.ResourcePolicy
+package com.application.nox
+
 import com.application.nox.ResourcePolicy.Activity
 import com.application.nox.ResourcePolicy.Pressure
 
