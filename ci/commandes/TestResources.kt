@@ -21,7 +21,8 @@ fun testResources(): Int {
 
     check("animation nominale 60 i/s", ResourcePolicy.frameBudgetMs(60, false, false, Pressure.NOMINAL) == 16L)
     check("Gemma réfléchit → 24 i/s", ResourcePolicy.frameBudgetMs(60, false, true, Pressure.NOMINAL) == 42L)
-    check("parole pendant la génération → 30 i/s", ResourcePolicy.frameBudgetMs(60, true, true, Pressure.NOMINAL) == 33L)
+    check("parole pendant la génération : cadence gardée (60 i/s)", ResourcePolicy.frameBudgetMs(60, true, true, Pressure.NOMINAL) == 16L)
+    check("parole pendant la génération : jamais sous 30 i/s", ResourcePolicy.frameBudgetMs(24, true, true, Pressure.NOMINAL) == 33L)
     check("contrainte : parole 25 i/s", ResourcePolicy.frameBudgetMs(60, true, false, Pressure.CONSTRAINED) == 40L)
     check("contrainte : repos 15 i/s", ResourcePolicy.frameBudgetMs(60, false, false, Pressure.CONSTRAINED) == 66L)
 
