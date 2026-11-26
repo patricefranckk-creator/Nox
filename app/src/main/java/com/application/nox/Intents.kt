@@ -124,7 +124,7 @@ object Intents {
         return found.singleOrNull()
     }
 
-    private val LIBRARY = Regex("\\b(?:(?:regarde|cherche|recherche|trouve|verifie|consulte|lis)\\s+)?(?:dans|d'apres|selon|avec|sur)\\s+(?:mes|ma|la|les|tes|ta)\\s+(?:fiches?|bibliotheque|documents?|connaissances|base de connaissances)\\b[ ,:]*")
+    private val LIBRARY = Regex("\\b(?:(?:regarde|cherche|recherche|trouve|verifie|consulte|lis)\\s+)?(?:dans|d'apres|selon|avec|sur)\\s+(?:mes|ma|la|les|tes|ta)\\s+(?:fiches?|bibliotheque|documents?|base de connaissances|connaissances|memoire|base)\\b[ ,:]*")
     private val LIBRARY_VERB = Regex("^(?:nox[ ,]+)?(?:est-ce que tu peux |tu peux |peux-tu )?(?:regarde|cherche|recherche|trouve|verifie|consulte|lis)\\s+(?:moi\\s+)?")
 
     /**

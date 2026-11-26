@@ -1,6 +1,10 @@
 package com.application.nox
 
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.Shader
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.view.Gravity
@@ -51,6 +55,25 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         pack = null
         startupPlayed = false
         if (isShown) sync()
+    }
+
+    private val edge = Paint()
+
+    /** Bords du carré fondus au noir : le sol lumineux de la vidéo ne s'arrête plus net sur un trait. */
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        val v = slots[0].view
+        val l = v.left.toFloat(); val t = v.top.toFloat(); val r = v.right.toFloat(); val b = v.bottom.toFloat()
+        if (r <= l) return
+        val f = (b - t) * EDGE
+        fun band(x0: Float, y0: Float, x1: Float, y1: Float, gx0: Float, gy0: Float, gx1: Float, gy1: Float) {
+            edge.shader = LinearGradient(gx0, gy0, gx1, gy1, 0xFF000000.toInt(), 0x00000000, Shader.TileMode.CLAMP)
+            canvas.drawRect(x0, y0, x1, y1, edge)
+        }
+        band(l, b - f, r, b, 0f, b, 0f, b - f)
+        band(l, t, r, t + f, 0f, t, 0f, t + f)
+        band(l, t, l + f, b, l, 0f, l + f, 0f)
+        band(r - f, t, r, b, r, 0f, r - f, 0f)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -292,5 +315,7 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         private var startupPlayed = false
         private const val FIRST_FRAME_TIMEOUT_MS = 600L
         private const val PAUSE_MS = 150f
+        /** Part du carré fondue au noir sur chaque bord. */
+        private const val EDGE = 0.07f
     }
 }

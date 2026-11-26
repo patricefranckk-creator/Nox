@@ -46,6 +46,8 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         setLineSpacing(0f, 1.25f)
         maxLines = 4
         ellipsize = android.text.TextUtils.TruncateAt.START
+        // lisible même par-dessus l'image de Nox
+        setShadowLayer(a.dp(6).toFloat(), 0f, 0f, 0xE6000000.toInt())
         setPadding(a.dp(24), 0, a.dp(24), 0)
         accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
@@ -234,8 +236,9 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
         maxLines = 1
         minHeight = a.dp(44)
         setPadding(a.dp(4), 0, a.dp(4), 0)
-        setAutoSizeTextTypeUniformWithConfiguration(9, 14, 1, TypedValue.COMPLEX_UNIT_SP)
-        layoutParams = android.widget.LinearLayout.LayoutParams(0, a.dp(44), 1f)
+        // même taille pour tous les onglets ; la place restante est partagée
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        layoutParams = android.widget.LinearLayout.LayoutParams(-2, a.dp(44), 1f)
         isClickable = true; isFocusable = true
     }
 
