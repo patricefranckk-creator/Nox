@@ -1273,6 +1273,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         }
         if (voiceIn == null) voiceIn = VoiceIn(this, this)
         voiceIn?.patienceMs = prefs.patienceMs
+        voiceIn?.maxMs = prefs.maxListenSec * 1000L
         setMode(NeuronView.State.LISTENING, "Je t'écoute…")
         voiceIn?.start()
     }

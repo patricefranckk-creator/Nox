@@ -32,8 +32,25 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     var active = false; private set
     /** Silence à attendre avant de considérer la phrase finie. */
     var patienceMs = 2000
+    /** Durée maximale d'un message vocal, toutes reprises comprises. */
+    var maxMs = 90_000L
     private var startedAt = 0L
+    private var sessionAt = 0L
     private var ready = false
+    /**
+     * Écoute continue : la reconnaissance du téléphone coupe dès une petite pause. On garde ce qu'elle a
+     * compris, on rouvre le micro aussitôt, et on ne rend la phrase entière qu'après [patienceMs] de vrai silence.
+     */
+    private val heard = StringBuilder()
+    private var continuing = false
+    private var spoke = false
+    private var finishing = false
+    private val gap = Runnable {
+        if (!active || !continuing || spoke) return@Runnable
+        NoxLog.d("VOIX", "Silence de $patienceMs ms : fin du message")
+        try { recognizer?.cancel() } catch (_: Throwable) {}
+        deliver()
+    }
     private val main = Handler(Looper.getMainLooper())
     /** Le service de reconnaissance n'a jamais répondu : on change de moteur une fois, sinon on le dit. */
     private val watchdog = Runnable {
@@ -75,6 +92,15 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     }
 
     fun start() {
+        heard.setLength(0)
+        continuing = false
+        finishing = false
+        sessionAt = System.currentTimeMillis()
+        listen()
+    }
+
+    private fun listen() {
+        spoke = false
         if (!SpeechRecognizer.isRecognitionAvailable(ctx) && !onDevice) {
             listener.onVoiceError("Aucun service de reconnaissance vocale sur ce téléphone")
             return
@@ -93,8 +119,22 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
         }
     }
 
+    /** Rend tout ce qui a été entendu depuis le début du message. */
+    private fun deliver() {
+        main.removeCallbacks(gap)
+        main.removeCallbacks(watchdog)
+        active = false
+        continuing = false
+        val t = heard.toString().trim()
+        heard.setLength(0)
+        if (t.isEmpty()) listener.onNothing() else listener.onFinal(t)
+    }
+
     fun stop() {
         main.removeCallbacks(watchdog)
+        main.removeCallbacks(gap)
+        heard.setLength(0)
+        continuing = false
         if (!active) return
         active = false
         NoxLog.d("VOIX", "Écoute Android annulée")
@@ -105,11 +145,15 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
     fun finish() {
         if (!active) return
         NoxLog.d("VOIX", "Fin d'écoute demandée : résultat attendu")
+        finishing = true
+        // en attente d'une reprise sans parole : on rend tout de suite ce qui a été dit
+        if (continuing && !spoke) { try { recognizer?.cancel() } catch (_: Throwable) {}; deliver(); return }
         try { recognizer?.stopListening() } catch (_: Throwable) { stop(); listener.onNothing() }
     }
 
     fun release() {
         main.removeCallbacks(watchdog)
+        main.removeCallbacks(gap)
         active = false
         recognizer?.destroy()
         recognizer = null
@@ -119,10 +163,15 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
         override fun onReadyForSpeech(params: Bundle?) {
             ready = true
             main.removeCallbacks(watchdog)
-            NoxLog.d("VOIX", "Micro prêt en ${System.currentTimeMillis() - startedAt} ms")
-            listener.onListening()
+            NoxLog.d("VOIX", "Micro prêt en ${System.currentTimeMillis() - startedAt} ms" + if (continuing) " (reprise)" else "")
+            if (continuing) { main.removeCallbacks(gap); main.postDelayed(gap, patienceMs.toLong()) }
+            else listener.onListening()
         }
-        override fun onBeginningOfSpeech() = NoxLog.d("VOIX", "Parole détectée")
+        override fun onBeginningOfSpeech() {
+            spoke = true
+            main.removeCallbacks(gap)
+            NoxLog.d("VOIX", "Parole détectée")
+        }
         override fun onRmsChanged(rmsdB: Float) = listener.onLevel(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() = listener.onLevel(0f)
@@ -130,19 +179,34 @@ class VoiceIn(private val ctx: Context, private val listener: Listener) {
 
         override fun onPartialResults(partial: Bundle?) {
             val t = partial?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-            if (!t.isNullOrBlank()) listener.onPartial(t)
+            if (!t.isNullOrBlank()) { spoke = true; main.removeCallbacks(gap); listener.onPartial((heard.toString() + " " + t).trim()) }
         }
 
         override fun onResults(results: Bundle?) {
+            if (!active) return
             main.removeCallbacks(watchdog)
-            active = false
             NoxLog.i("VOIX", "Reconnaissance Android OK en ${System.currentTimeMillis() - startedAt} ms (sur l'appareil=$onDevice)")
             val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-            if (t.isNullOrBlank()) listener.onNothing() else listener.onFinal(t.trim())
+            if (!t.isNullOrBlank()) heard.append(' ').append(t.trim())
+            val elapsed = System.currentTimeMillis() - sessionAt
+            // on rouvre le micro pour la suite, sauf fin demandée, rien entendu du tout, ou message trop long
+            if (!finishing && heard.isNotBlank() && elapsed < maxMs && patienceMs > 0) {
+                listener.onPartial(heard.toString().trim())
+                continuing = true
+                listen()
+            } else deliver()
         }
 
         override fun onError(error: Int) {
+            // écoute déjà close (annulée ou message rendu) : l'erreur d'annulation n'a rien à dire
+            if (!active) return
             main.removeCallbacks(watchdog)
+            // la reprise n'a rien entendu de plus : on rend ce qui a été dit avant
+            if (continuing && heard.isNotBlank() && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == SpeechRecognizer.ERROR_CLIENT)) {
+                NoxLog.d("VOIX", "Reprise sans parole (code $error) : fin du message")
+                deliver(); return
+            }
+            continuing = false
             active = false
             if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT && error != SpeechRecognizer.ERROR_CLIENT)
                 NoxLog.w("VOIX", "Reconnaissance Android : erreur $error (sur l'appareil=$onDevice)")

@@ -94,7 +94,7 @@ class Prefs(ctx: Context) {
 
     /** Écoute : silence (ms) avant de considérer que tu as fini de parler. */
     var patienceMs: Int
-        get() = sp.getInt("patience_ms", 2000)
+        get() = sp.getInt("patience_ms", 3000)
         set(v) = sp.edit().putInt("patience_ms", v).apply()
 
     /** Durée maximale d'un message vocal (s). */

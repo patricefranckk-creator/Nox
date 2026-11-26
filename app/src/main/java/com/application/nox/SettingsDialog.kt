@@ -79,7 +79,7 @@ class SettingsDialog(private val a: MainActivity) {
             12f, Ui.MUTED).apply { setPadding(0, a.dp(4), 0, a.dp(6)) })
         val oldListen = p.listenMode
         body.addView(label("Patience : silence avant que Nox réponde"))
-        val patience = radios(listOf("1200" to "1,2 s · réactif", "2000" to "2 s · normal", "3000" to "3 s · posé", "5000" to "5 s · je réfléchis en parlant"), p.patienceMs.toString())
+        val patience = radios(listOf("1200" to "1,2 s · réactif", "2000" to "2 s · normal", "3000" to "3 s · posé", "5000" to "5 s · je réfléchis en parlant", "8000" to "8 s · longues pauses"), p.patienceMs.toString())
         body.addView(patience)
         body.addView(label("Durée maximale d'un message vocal"))
         val maxL = radios(listOf("30" to "30 s", "90" to "1 min 30", "180" to "3 min"), p.maxListenSec.toString())
@@ -173,7 +173,7 @@ class SettingsDialog(private val a: MainActivity) {
             p.vision = vision.isChecked
             p.contextTokens = checkedTag(ctx)?.toIntOrNull() ?: 4096
             p.listenMode = checkedTag(listen) ?: "android"
-            p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 2000
+            p.patienceMs = checkedTag(patience)?.toIntOrNull() ?: 3000
             p.maxListenSec = checkedTag(maxL)?.toIntOrNull() ?: 90
             p.background = bg.isChecked
             p.bubble = bubble.isChecked
