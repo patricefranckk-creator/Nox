@@ -43,9 +43,10 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         for (s in slots) addView(s.view, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.CENTER))
     }
 
-    /** Mode hologramme choisi : la vidéo de démarrage est rejouée une fois. */
+    /** Page vocale ouverte ou mode hologramme choisi : la vidéo d'allumage est rejouée une fois. */
     fun activate() {
         startupPlayed = false
+        NoxLog.i("HOLO", "Allumage de l'hologramme")
         if (isShown) { releaseAll(); sync() }
     }
 
@@ -94,13 +95,12 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
         shownChanged()
     }
 
-    /** Chaque ouverture de la page vocale rallume l'hologramme : la vidéo de démarrage est rejouée. */
+    /**
+     * Retour d'une autre appli : on reprend directement l'état en cours, sans rallumer l'hologramme
+     * (l'allumage est réservé à l'ouverture de la page vocale, voir [activate]).
+     */
     private fun shownChanged() {
         val now = isShown && windowVisibility == VISIBLE
-        if (now && !wasShown) {
-            startupPlayed = false
-            NoxLog.i("HOLO", "Page vocale ouverte : démarrage de l'hologramme")
-        }
         wasShown = now
         if (now) sync() else releaseAll()
     }

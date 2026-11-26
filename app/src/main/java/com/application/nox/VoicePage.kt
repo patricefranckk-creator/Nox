@@ -148,6 +148,7 @@ class VoicePage(private val a: MainActivity, root: FrameLayout) {
     fun open() {
         if (isOpen) return
         isOpen = true
+        holo.activate()
         page.visibility = View.VISIBLE
         page.alpha = 0f
         val shown = current()

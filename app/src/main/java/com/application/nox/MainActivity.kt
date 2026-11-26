@@ -155,6 +155,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         main.removeCallbacks(autoPlug)
         main.postDelayed(autoPlug, 3000)
         PermissionsDialog.current?.refresh()
+        main.postDelayed({ explainBubble() }, 600)
     }
 
     private fun stopListening() {
@@ -169,9 +170,32 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         chats.save(messages)
         // Nox passe derrière une autre appli : la bulle reste à portée de doigt
         if (prefs.bubble && prefs.background && engine.ready && !isFinishing && !isChangingConfigurations) {
+            if (!android.provider.Settings.canDrawOverlays(this) && NoxAccess.instance == null) {
+                NoxLog.w("BULLE", "Passage en arrière-plan sans bulle : « Afficher par-dessus les autres applis » non autorisé")
+                bubbleMissed = true
+            }
             Bubble.show(this)
             Bubble.state(mode)
         }
+    }
+
+    /** Nox est passé derrière une autre appli sans pouvoir laisser sa bulle : on explique une fois, au retour. */
+    private var bubbleMissed = false
+    private var bubbleExplained = false
+
+    private fun explainBubble() {
+        if (!bubbleMissed || bubbleExplained) return
+        bubbleMissed = false
+        bubbleExplained = true
+        NoxDialog.Builder(this).setTitle("Nox en arrière-plan").setIcon("🫧")
+            .setMessage("Quand tu passes sur une autre appli, Nox laisse une bulle flottante pour continuer à lui parler. " +
+                "Android ne l'a pas autorisée : active « Afficher par-dessus les autres applis » pour Nox.")
+            .setPositiveButton("Autoriser") { _, _ ->
+                try { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))) }
+                catch (_: Throwable) { toast("Ouvre Réglages › Applis › Nox › Afficher par-dessus") }
+            }
+            .setNegativeButton("Plus tard", null)
+            .show()
     }
 
     override fun onDestroy() {
