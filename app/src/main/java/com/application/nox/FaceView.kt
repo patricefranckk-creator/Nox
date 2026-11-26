@@ -8,7 +8,6 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
-import android.os.PowerManager
 import android.os.SystemClock
 import android.view.View
 import kotlin.math.max
@@ -65,18 +64,13 @@ class FaceView(ctx: Context) : View(ctx) {
     private val nose = Path().apply { moveTo(150f, 168f); lineTo(145f, 206f); quadTo(150f, 211f, 157f, 207f) }
     private val nodes = floatArrayOf(128f, 112f, 172f, 112f, 150f, 70f, 104f, 252f, 196f, 252f)
 
-    private val power = ctx.getSystemService(PowerManager::class.java)
     private var hot = false
-    private var hotCheck = 0L
 
     override fun onDraw(c: Canvas) {
         val now = SystemClock.uptimeMillis()
         val dt = if (lastFrame == 0L) 0.033f else ((now - lastFrame) / 1000f).coerceIn(0.001f, 0.1f)
         lastFrame = now
-        if (now - hotCheck > 5000) {
-            hotCheck = now
-            hot = (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE
-        }
+        hot = ResourceManager.current() == ResourcePolicy.Pressure.CONSTRAINED
         b.step(dt)
 
         val scale = min(width / 300f, height / 360f)

@@ -77,6 +77,8 @@ class LlmEngine(
     private var charsInContext = 0
     /** Taille des extraits (web, bibliothèque, écran) glissés dans le dernier message. */
     private var heavyChars = 0
+    /** Génération en cours, déclarée au pilotage des ressources (la maintenance attend sa fin). */
+    @Volatile private var inference: ResourceManager.Lease? = null
     @Volatile private var lightenPending = false
 
     // ------------------------------------------------------------------ chargement
@@ -109,7 +111,7 @@ class LlmEngine(
             val wantAudio = prefs.listenMode == "native" && multimodal
             val wantVision = prefs.vision && multimodal
             val wantGpu = prefs.backend == "gpu" && spec?.cpuOnly != true
-            val ctxWanted = minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE)
+            val ctxWanted = ResourceManager.contextFor(minOf(prefs.contextTokens, spec?.maxCtx ?: Int.MAX_VALUE))
 
             // Cascade : toutes les variantes GPU, de la plus complète à la plus légère, puis le CPU.
             val attempts = mutableListOf<Attempt>()
@@ -342,7 +344,7 @@ class LlmEngine(
      * deviennent rares. La réponse, elle, reste dans l'historique.
      */
     fun lighten(history: List<ChatMsg>) {
-        val full = charsInContext > ctxTokens * CHARS_PER_TOKEN * USABLE * EARLY_COMPACT
+        val full = charsInContext > ctxTokens * CHARS_PER_TOKEN * USABLE * ResourceManager.earlyCompact()
         if ((!lightenPending && !full) || busy || engine == null) return
         if (full && !lightenPending) NoxLog.i("MOTEUR", "Mémoire de travail bien remplie : compactage d'avance, pendant que tu lis")
         lightenPending = false
@@ -453,7 +455,8 @@ class LlmEngine(
             }
             charsInContext += approxChars
             skills.callsThisTurn.set(0)
-            library.hold = true
+            inference?.release()
+            inference = ResourceManager.begin(ResourcePolicy.Activity.INFERENCE)
             NoxLog.d("GEN", "Envoi ($mode, ≈${(approxChars / CHARS_PER_TOKEN).toInt()} jetons) · ${NoxLog.memSnapshot()}")
             val t0 = System.nanoTime()
             var tFirst = 0L
@@ -498,7 +501,7 @@ class LlmEngine(
                         charsInContext += chars
                         if (heavyChars >= LIGHTEN_MIN) lightenPending = true
                         busy = false
-                        library.hold = false
+                        inference?.release()
                         val stats = stats(t0, tFirst, chars)
                         record(mode, t0, tFirst, chars)
                         post { l.onDone(stats) }
@@ -507,7 +510,7 @@ class LlmEngine(
                     override fun onError(throwable: Throwable) {
                         charsInContext += chars
                         busy = false
-                        library.hold = false
+                        inference?.release()
                         if (throwable is CancellationException) {
                             NoxLog.i("GEN", "Génération interrompue après $chars caractères")
                             post { l.onDone("interrompu") }
@@ -523,7 +526,7 @@ class LlmEngine(
                 })
             } catch (t: Throwable) {
                 busy = false
-                library.hold = false
+                inference?.release()
                 NoxLog.e("GEN", "Envoi impossible", t)
                 post { l.onError(t.message ?: "erreur") }
             }
@@ -554,6 +557,8 @@ class LlmEngine(
         NoxLog.turn(NoxLog.Turn(System.currentTimeMillis(), mode, (tFirst - t0) / 1_000_000, dec, tokens,
             if (dec > 50) tokens * 1000.0 / dec else 0.0, lastRagMs, lastRagHits, skills.callsThisTurn.get(),
             (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt(), backendLabel))
+        ResourceManager.onTurn((tFirst - t0) / 1_000_000, if (dec > 50) tokens * 1000.0 / dec else 0.0,
+            (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt(), backendLabel)
     }
 
     private fun stats(t0: Long, tFirst: Long, chars: Int): String {
@@ -604,8 +609,6 @@ class LlmEngine(
         private const val ANSWER_RESERVE = 1300
         /** Au-delà de ce volume d'extraits, la conversation est allégée après la réponse. */
         private const val LIGHTEN_MIN = 500
-        /** Au-delà de cette part de la mémoire utile, compactage d'avance entre deux tours. */
-        private const val EARLY_COMPACT = 0.62
         /** Derniers messages repris mot pour mot ; les précédents sont résumés. */
         private const val FULL_MESSAGES = 6
         private const val RECAP_MESSAGES = 16

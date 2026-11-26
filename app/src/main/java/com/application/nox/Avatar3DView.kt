@@ -6,7 +6,6 @@ import android.opengl.GLES30
 import android.opengl.Matrix
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.view.TextureView
 import android.view.View
 import java.nio.FloatBuffer
@@ -34,7 +33,6 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
     private var th = 0
     private val main = Handler(Looper.getMainLooper())
     private val density = ctx.resources.displayMetrics.density
-    private val power = ctx.getSystemService(PowerManager::class.java)
 
     init {
         isOpaque = false
@@ -140,7 +138,7 @@ class Avatar3DView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
     // ================================================================== rendu
 
-    private inner class Renderer(st: SurfaceTexture, private val mesh: FaceMesh) : GlThread(st, "nox-avatar-3d", power, 30, { t ->
+    private inner class Renderer(st: SurfaceTexture, private val mesh: FaceMesh) : GlThread(st, "nox-avatar-3d", 30, { t ->
         NoxLog.e("AVATAR", "Avatar 3D impossible sur cet appareil, retour au visage 2,5D", t)
         main.post { onFail?.invoke() }
     }) {

@@ -151,6 +151,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onResume() {
         super.onResume()
         Nox.ui = this
+        ResourceManager.setVisible(true)
         Bubble.hide()
         main.removeCallbacks(autoPlug)
         main.postDelayed(autoPlug, 3000)
@@ -166,6 +167,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     override fun onPause() {
         main.removeCallbacks(autoPlug)
         super.onPause()
+        ResourceManager.setVisible(false)
         stopListening()
         chats.save(messages)
         // Nox passe derrière une autre appli : la bulle reste à portée de doigt
@@ -490,6 +492,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     /** Un seul endroit pour l'état : neurone de l'en-tête, page vocale et ligne d'état. */
     private fun setMode(state: NeuronView.State, hint: String) {
         mode = state
+        ResourceManager.uiState(state)
         neuron.state = state
         if (::voicePage.isInitialized) voicePage.set(state, hint)
         Bubble.state(state)

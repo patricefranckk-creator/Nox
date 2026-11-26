@@ -31,6 +31,7 @@ object Nox {
         prefs = Prefs(app)
         NoxLog.init(app, "v${AppInfo.version(app)} (build ${AppInfo.build(app)})")
         NoxLog.verbose = prefs.verboseLog
+        ResourceManager.init(app)
         store = ModelStore(app)
         chats = ChatStore(app)
         library = Library(app, store)

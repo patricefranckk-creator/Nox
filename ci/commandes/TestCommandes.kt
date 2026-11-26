@@ -40,5 +40,6 @@ fun main() {
     }
     println("${cases.size - bad}/${cases.size} corrects")
     bad += testIntents()
+    bad += testResources()
     if (bad > 0) kotlin.system.exitProcess(1)
 }

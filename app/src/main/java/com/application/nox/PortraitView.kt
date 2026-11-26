@@ -6,7 +6,6 @@ import android.graphics.SurfaceTexture
 import android.opengl.GLES30
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.view.TextureView
 import android.view.View
 import java.nio.ByteBuffer
@@ -34,7 +33,6 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
     private var tw = 0
     private var th = 0
     private val main = Handler(Looper.getMainLooper())
-    private val power = ctx.getSystemService(PowerManager::class.java)
 
     init {
         isOpaque = false
@@ -83,7 +81,7 @@ class PortraitView(ctx: Context) : TextureView(ctx), TextureView.SurfaceTextureL
 
     // ================================================================== rendu
 
-    private inner class Renderer(st: SurfaceTexture) : GlThread(st, "nox-portrait", power, 60, { t ->
+    private inner class Renderer(st: SurfaceTexture) : GlThread(st, "nox-portrait", 60, { t ->
         NoxLog.e("PORTRAIT", "Portrait animé impossible, retour au visage 2,5D", t)
         main.post { onFail?.invoke("Portrait animé indisponible : ${t.message}") }
     }) {

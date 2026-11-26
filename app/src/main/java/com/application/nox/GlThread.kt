@@ -7,24 +7,20 @@ import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
-import android.os.PowerManager
 import android.os.SystemClock
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
-import kotlin.math.max
-import kotlin.math.min
 
 /**
  * Fil de rendu OpenGL ES 3 commun aux avatars (3D et portrait) : contexte EGL sur une SurfaceTexture,
- * boucle à 30 ou 60 images/s, 15 en cas de chauffe, pause quand la vue est cachée. Les sous-classes
+ * boucle à 30 ou 60 images/s dont la cadence est décidée par [ResourceManager], pause quand la vue est cachée. Les sous-classes
  * préparent leurs ressources dans [setup] et dessinent une image dans [frame].
  */
 abstract class GlThread(
     private val st: SurfaceTexture,
     name: String,
-    private val power: PowerManager?,
     private val fps: Int,
     private val onError: (Throwable) -> Unit,
 ) : Thread(name) {
@@ -52,25 +48,17 @@ abstract class GlThread(
             egl()
             setup()
             var last = SystemClock.uptimeMillis()
-            var hot = false
-            var hotCheck = 0L
             while (running) {
                 if (paused) { sleep(120); last = SystemClock.uptimeMillis(); continue }
                 val now = SystemClock.uptimeMillis()
-                if (now - hotCheck > 5000) { hotCheck = now; hot = (power?.currentThermalStatus ?: 0) >= PowerManager.THERMAL_STATUS_SEVERE }
+                // effets riches et cadence décidés par le pilotage central des ressources
+                val hot = !ResourceManager.richEffects()
                 val dt = ((now - last) / 1000f).coerceIn(0.001f, 0.1f)
                 last = now
                 frame(dt, hot)
                 EGL14.eglSwapBuffers(display, surface)
                 val spent = SystemClock.uptimeMillis() - now
-                // Gemma partage la carte graphique : pendant qu'il réfléchit, l'animation ralentit à 24 images/s
-                val talking = FaceBrain.state == NeuronView.State.SPEAKING
-                // la bouche qui parle a besoin d'images régulières : au moins 30 par seconde, 25 si le téléphone chauffe
-                val budget = when {
-                    hot -> if (talking) 40L else 66L
-                    Nox.engine.busy -> if (talking) min(33L, 1000L / fps) else max(42L, 1000L / fps)
-                    else -> 1000L / fps
-                }
+                val budget = ResourceManager.frameBudgetMs(fps)
                 if (spent < budget) sleep(budget - spent)
             }
         } catch (_: InterruptedException) {

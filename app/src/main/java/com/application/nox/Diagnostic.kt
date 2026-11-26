@@ -217,6 +217,9 @@ class Diagnostic(private val a: MainActivity) {
         val pm = a.getSystemService(PowerManager::class.java)
         c.line("Marge thermique (0 froid → 1 bridage) : ${pm.getThermalHeadroom(10)}")
         val mi = ActivityManager.MemoryInfo().also { a.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
+        c.line("Pilotage des ressources : ${ResourceManager.describe()}")
+        c.line("Recherches dans les fiches : ${Nox.library.searched} calculée(s) · ${Nox.library.reused} réutilisée(s) sans recalcul")
+        ResourceManager.recentDecisions().forEach { c.line("  décision · $it") }
         if (mi.lowMemory) c.warn("Android signale une mémoire basse")
         if (pm.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE) c.warn("Téléphone très chaud : vitesse bridée")
         c.summary = "Nox occupe ${NoxLog.gb(pss.totalPss * 1024L)} · libre ${NoxLog.gb(mi.availMem)}"

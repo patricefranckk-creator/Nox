@@ -38,6 +38,16 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     private val db = Db(ctx)
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "nox-rag").apply { priority = Thread.NORM_PRIORITY - 1 } }
     private val chunks = ArrayList<Chunk>()
+    /**
+     * Résultats récents, mutualisés entre l'aiguillage et la génération : même requête, mêmes filtres,
+     * même état de la bibliothèque ([gen] change à chaque ajout, retrait ou vectorisation) → même réponse.
+     */
+    @Volatile private var gen = 0
+    private val recent = object : LinkedHashMap<String, List<Hit>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Hit>>?) = size > 8
+    }
+    @Volatile var reused = 0; private set
+    @Volatile var searched = 0; private set
     private val lock = Any()
 
     // BM25
@@ -45,7 +55,6 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     private var avgLen = 1.0
 
     /** Mis à vrai par le moteur pendant une génération : la vectorisation de fond se met en pause. */
-    @Volatile var hold = false
 
     @Volatile private var embedder: EmbeddingEngine? = null
     @Volatile var semantic = false; private set
@@ -55,7 +64,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
     init {
         worker.execute {
-            synchronized(lock) { chunks.addAll(db.loadAll()); rebuildStats() }
+            synchronized(lock) { chunks.addAll(db.loadAll()); rebuildStats(); gen++ }
             enableSemantic()
         }
     }
@@ -151,10 +160,11 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         val clock = NoxLog.chrono()
         var ok = 0
         for ((i, c) in todo.withIndex()) {
-            while (hold) Thread.sleep(150)           // le cerveau principal passe d'abord
+            ResourceManager.awaitMaintenance()       // le pilotage des ressources dit quand avancer
             if (i > 0 && i % 100 == 0) NoxLog.i("RAG", "Vectorisation… $i/${todo.size}")
             val v = embed(c.title + "\n" + c.text, query = false) ?: continue
             c.vec = v
+            gen++
             db.setVec(c.id, v)
             ok++
         }
@@ -319,7 +329,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     fun removeFreekipedia(done: (() -> Unit)? = null) {
         worker.execute {
             db.deleteLike("fk:%")
-            synchronized(lock) { chunks.removeAll { it.source.startsWith("fk:") }; rebuildStats() }
+            synchronized(lock) { chunks.removeAll { it.source.startsWith("fk:") }; rebuildStats(); gen++ }
             NoxLog.i("RAG", "Fiches Freekipedia retirées")
             done?.let { android.os.Handler(android.os.Looper.getMainLooper()).post(it) }
         }
@@ -333,13 +343,13 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             val id = db.insert(source, title, t, now, v)
             Chunk(id, source, title, t, now, v)
         }
-        synchronized(lock) { chunks.addAll(added); if (rebuild) rebuildStats() }
+        synchronized(lock) { chunks.addAll(added); if (rebuild) rebuildStats(); gen++ }
         return added.size
     }
 
     private fun removeSourceNow(source: String, rebuild: Boolean = true) {
         db.deleteSource(source)
-        synchronized(lock) { chunks.removeAll { it.source == source }; if (rebuild) rebuildStats() }
+        synchronized(lock) { chunks.removeAll { it.source == source }; if (rebuild) rebuildStats(); gen++ }
     }
 
     /** On garde les ~1500 derniers échanges (largement assez, et la recherche reste instantanée). */
@@ -350,7 +360,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         val gone = chats.take(extra)
         gone.forEach { db.deleteId(it.id) }
         val ids = gone.map { it.id }.toHashSet()
-        synchronized(lock) { chunks.removeAll { it.id in ids }; rebuildStats() }
+        synchronized(lock) { chunks.removeAll { it.id in ids }; rebuildStats(); gen++ }
     }
 
     // ================================================================ recherche
@@ -363,6 +373,18 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     fun search(query: String, k: Int = 4, excludeChatsAfter: Long = Long.MAX_VALUE, strict: Boolean = false): List<Hit> {
         val q = query.trim()
         if (q.length < 3) return emptyList()
+        val key = "$gen|$k|$excludeChatsAfter|$strict|$q"
+        synchronized(recent) { recent[key] }?.let { reused++; NoxLog.d("RAG", "Recherche réutilisée (« ${q.take(40)} »)"); return it }
+        val lease = ResourceManager.begin(ResourcePolicy.Activity.RETRIEVING)
+        try {
+            val hits = searchNow(q, k, excludeChatsAfter, strict)
+            searched++
+            synchronized(recent) { recent[key] = hits }
+            return hits
+        } finally { lease.release() }
+    }
+
+    private fun searchNow(q: String, k: Int, excludeChatsAfter: Long, strict: Boolean): List<Hit> {
         val qTerms = Text.terms(q).distinct()
         val dfQ = HashMap<String, Int>()
         var avg: Double
