@@ -134,7 +134,7 @@ object Intents {
     fun libraryQuery(text: String): String? {
         val f = Text.fold(text.replace('’', '\'')).trim().trimEnd('.', '!', '?', '…')
         if (!LIBRARY.containsMatchIn(f)) return null
-        val q = LIBRARY_VERB.replace(LIBRARY.replace(f, " "), "")
+        val q = LIBRARY_VERB.replace(LIBRARY.replace(f, " ").trim(), "").trim()
             .replace(Regex("^(?:ce que|ce qu'|si |des infos sur |des informations sur |a propos de |au sujet de |sur )"), "")
             .replace(Regex("\\s+"), " ").trim(' ', ',', ':', '-')
         return q.ifBlank { null }
