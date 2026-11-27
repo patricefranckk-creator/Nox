@@ -20,7 +20,8 @@ fun testResources(): Int {
     check("marge 0,66 au repos (HONOR) → nominale", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(head = 0.66f)) == Pressure.NOMINAL)
     check("passage en arrière-plan (niveau 20) n'est pas un manque de mémoire", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(trim = 20)) == Pressure.NOMINAL)
     check("mémoire critique en cours d'utilisation → contrainte", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(trim = 15)) == Pressure.CONSTRAINED)
-    check("RAM à 95 % → contrainte", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(avail = 400)) == Pressure.CONSTRAINED)
+    check("RAM presque au seuil d'Android → contrainte", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(avail = 350)) == Pressure.CONSTRAINED)
+    check("1,2 Go libres avec Gemma chargé → nominale", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(avail = 1200)) == Pressure.NOMINAL)
 
     check("animation nominale 60 i/s", ResourcePolicy.frameBudgetMs(60, false, false, Pressure.NOMINAL) == 16L)
     check("Gemma réfléchit → 24 i/s", ResourcePolicy.frameBudgetMs(60, false, true, Pressure.NOMINAL) == 42L)

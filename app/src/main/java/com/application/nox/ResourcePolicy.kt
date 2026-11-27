@@ -29,6 +29,8 @@ object ResourcePolicy {
         val lowMemory: Boolean,
         /** Dernier niveau onTrimMemory reçu récemment (0 si aucun). */
         val trimLevel: Int,
+        /** Seuil sous lequel Android se déclare en mémoire basse (MemoryInfo.threshold). */
+        val thresholdMb: Long = 226,
     )
 
     // ------------------------------------------------------------------ pression
@@ -46,12 +48,14 @@ object ResourcePolicy {
         return maxOf(byStatus, byHeadroom)
     }
 
-    /** Score de mémoire 0..1 : part de RAM occupée, relevée si Android signale une tension. */
+    /**
+     * Score de mémoire 0..1, mesuré contre le seuil propre au téléphone : avec Gemma chargé, 1 à 1,5 Go
+     * libres sont normaux. Le score monte à partir de 4 fois le seuil d'Android et vaut 1 à 1,5 fois ce seuil.
+     */
     fun memory(s: Sample): Float {
         if (s.totalMb <= 0) return 0f
-        val used = 1f - s.availMb.toFloat() / s.totalMb
-        // en dessous d'environ 9 % de RAM libre, Android commence à tuer des applis
-        val byFree = ((used - 0.70f) / 0.21f).coerceIn(0f, 1f)
+        val t = s.thresholdMb.coerceAtLeast(64)
+        val byFree = ((t * 4f - s.availMb) / (t * 2.5f)).coerceIn(0f, 1f)
         // seuls les niveaux « en cours d'utilisation » comptent ; 20 et plus veulent dire « Nox est passé
         // en arrière-plan » (UI_HIDDEN, BACKGROUND…), pas que le téléphone manque de mémoire
         val byTrim = when (s.trimLevel) {

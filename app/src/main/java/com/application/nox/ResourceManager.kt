@@ -114,7 +114,11 @@ object ResourceManager {
         else { speakLease?.release(); speakLease = null }
     }
 
-    fun setVisible(v: Boolean) { visible = v }
+    /** Visibilité retenue sur disque : au prochain lancement, on saura si une fermeture a eu lieu à l'écran. */
+    fun setVisible(v: Boolean) {
+        visible = v
+        if (started) profile.edit().putBoolean(KEY_SHOWN, v).putLong(KEY_SHOWN_AT, System.currentTimeMillis()).apply()
+    }
 
     fun isActive(a: Activity) = a in activeSet
 
@@ -127,7 +131,7 @@ object ResourceManager {
         am?.getMemoryInfo(mi) ?: return null
         val headroom = try { power?.getThermalHeadroom(10)?.takeIf { !it.isNaN() } } catch (_: Throwable) { null }
         val trim = synchronized(lock) { if (now - trimAt < 60_000) trimLevel else 0 }
-        val s = ResourcePolicy.Sample(power?.currentThermalStatus ?: 0, headroom, mi.availMem shr 20, mi.totalMem shr 20, mi.lowMemory, trim)
+        val s = ResourcePolicy.Sample(power?.currentThermalStatus ?: 0, headroom, mi.availMem shr 20, mi.totalMem shr 20, mi.lowMemory, trim, mi.threshold shr 20)
         lastSample = s; lastSampleAt = now
         return s
     }
@@ -256,9 +260,10 @@ object ResourceManager {
                 newest = maxOf(newest, x.timestamp)
                 val lowMem = x.reason == ApplicationExitInfo.REASON_LOW_MEMORY || (x.description ?: "").contains("LowMem", true)
                 // en arrière-plan, Android ferme les applis pour faire de la place : ce n'est pas Nox qui déborde.
-                // Seules comptent les fermetures pendant que Nox était à l'écran.
-                val inFront = x.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-                if (lowMem && inFront) known += x.timestamp
+                // Seules comptent les fermetures pendant que Nox était réellement à l'écran (retenu par setVisible) ;
+                // l'importance annoncée par certains téléphones (« service au premier plan ») ne suffit pas.
+                val shownThen = profile.getBoolean(KEY_SHOWN, false) && profile.getLong(KEY_SHOWN_AT, 0L) <= x.timestamp
+                if (lowMem && shownThen && x.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) known += x.timestamp
             }
             val cut = System.currentTimeMillis() - ResourcePolicy.KILL_WINDOW_MS
             profile.edit().putString(KEY_KILLS, known.filter { it > cut }.sorted().joinToString(",")).putLong(KEY_SEEN, newest).apply()
@@ -268,9 +273,11 @@ object ResourceManager {
 
     private fun kills(): List<Long> = profile.getString(KEY_KILLS, "").orEmpty().split(',').mapNotNull { it.toLongOrNull() }
 
-    /** Clés v2 : la v1 comptait aussi les fermetures en arrière-plan (normales), on repart de zéro. */
-    private const val KEY_KILLS = "kills_v2"
-    private const val KEY_SEEN = "kills_v2_seen"
+    /** Clés v3 : les versions précédentes comptaient aussi des fermetures en arrière-plan (normales). */
+    private const val KEY_KILLS = "kills_v3"
+    private const val KEY_SEEN = "kills_v3_seen"
+    private const val KEY_SHOWN = "affiche"
+    private const val KEY_SHOWN_AT = "affiche_depuis"
 
     // ------------------------------------------------------------------ observabilité
 

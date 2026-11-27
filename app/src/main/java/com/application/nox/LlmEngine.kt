@@ -463,7 +463,9 @@ class LlmEngine(
             var tFirst = 0L
             var chars = 0
             val think = ThinkFilter()
-            val leak = LeakedCallFilter(skills.all.map { it.name }.toSet())
+            val leak = LeakedCallFilter(skills.all.associate { s ->
+                s.name to (s.params.optJSONArray("required")?.optString(0)?.takeIf { it.isNotEmpty() } ?: s.params.optJSONObject("properties")?.keys()?.asSequence()?.firstOrNull())
+            })
             val suggest = if (prefs.suggestions) SuggestFilter() else null
             try {
                 conv.sendMessageAsync(msg, object : MessageCallback {
@@ -717,7 +719,8 @@ class ThinkFilter {
  * (ex. « calculer{expression:<|"|>7 * 8<|"|>} » ou « calculer(expression: "7 * 8") ») : rien n'est affiché,
  * l'outil est exécuté à la fin.
  */
-class LeakedCallFilter(private val names: Set<String>) {
+class LeakedCallFilter(private val firstParam: Map<String, String?>) {
+    private val names = firstParam.keys
     private val head = StringBuilder()
     private var decided = false
     private var leaking = false
@@ -746,7 +749,7 @@ class LeakedCallFilter(private val names: Set<String>) {
         val close = if (open >= 0 && h[open] == '(') ')' else '}'
         val body = h.substring(open + 1).substringBeforeLast(close)
         val args = org.json.JSONObject()
-        Regex("(\\w+)\\s*:\\s*(?:\"((?:[^\"\\\\]|\\\\.)*)\"|([^,}]+))").findAll(body).forEach { m ->
+        Regex("(\\w+)\\s*[:=]\\s*(?:\"((?:[^\"\\\\]|\\\\.)*)\"|([^,})]+))").findAll(body).forEach { m ->
             val k = m.groupValues[1]
             val str = m.groups[2]?.value
             if (str != null) args.put(k, str) else {
@@ -754,6 +757,9 @@ class LeakedCallFilter(private val names: Set<String>) {
                 args.put(k, raw.toLongOrNull() ?: raw.toDoubleOrNull() ?: raw.toBooleanStrictOrNull() ?: raw)
             }
         }
+        // « calculer(7 * 8) » : une seule valeur sans nom → premier paramètre de l'outil
+        val bare = body.trim().trim('"', '\'')
+        if (args.length() == 0 && bare.isNotEmpty()) firstParam[name]?.let { args.put(it, bare) }
         call = name to args
         return null
     }
