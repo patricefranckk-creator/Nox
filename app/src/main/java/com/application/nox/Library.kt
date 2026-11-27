@@ -291,7 +291,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                         }
                         val source = "fk:$uid"
                         if (source in existing) maj++ else nouvelles++
-                        removeSourceNow(source, rebuild = false)
+                        removeSourceNow(source)
                         val title = f[5] ?: noxTitle ?: if (v3) {
                             (f[1] ?: "Fiche") + (f[3]?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
                         } else {
@@ -299,11 +299,10 @@ class Library(private val ctx: Context, private val store: ModelStore) {
                             (f[1] ?: "Fiche") + if (origin.isNotEmpty()) " ($origin)" else ""
                         }
                         vecteurs += vecs.count { it != null }
-                        passages += insert(source, title, texts, rebuild = false, vecs = vecs)
+                        passages += insert(source, title, texts, vecs = vecs)
                     }
                         w.setTransactionSuccessful()
                     } finally { w.endTransaction() }
-                    synchronized(lock) { rebuildStats() }
                     val info = listOfNotNull(meta["date"]?.let { "du $it" }, meta["producteur"],
                         if (v3 || biblio) meta["requete"]?.let { "« $it »" } else if (meta["complet"] == "1") "base complète" else "mise à jour").joinToString(" · ")
                     val r = FkResult(fiches.size, passages, nouvelles, maj, info, vecteurs)
@@ -329,13 +328,13 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     fun removeFreekipedia(done: (() -> Unit)? = null) {
         worker.execute {
             db.deleteLike("fk:%")
-            synchronized(lock) { chunks.removeAll { it.source.startsWith("fk:") }; rebuildStats(); gen++ }
+            synchronized(lock) { val out = chunks.filter { it.source.startsWith("fk:") }; chunks.removeAll(out.toSet()); unstat(out); gen++ }
             NoxLog.i("RAG", "Fiches Freekipedia retirées")
             done?.let { android.os.Handler(android.os.Looper.getMainLooper()).post(it) }
         }
     }
 
-    private fun insert(source: String, title: String, parts: List<String>, rebuild: Boolean = true, vecs: List<FloatArray?>? = null): Int {
+    private fun insert(source: String, title: String, parts: List<String>, vecs: List<FloatArray?>? = null): Int {
         val now = System.currentTimeMillis()
         val added = parts.indices.filter { parts[it].isNotBlank() }.map { i ->
             val t = parts[i]
@@ -343,13 +342,13 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             val id = db.insert(source, title, t, now, v)
             Chunk(id, source, title, t, now, v)
         }
-        synchronized(lock) { chunks.addAll(added); if (rebuild) rebuildStats(); gen++ }
+        synchronized(lock) { chunks.addAll(added); stat(added); gen++ }
         return added.size
     }
 
-    private fun removeSourceNow(source: String, rebuild: Boolean = true) {
+    private fun removeSourceNow(source: String) {
         db.deleteSource(source)
-        synchronized(lock) { chunks.removeAll { it.source == source }; if (rebuild) rebuildStats(); gen++ }
+        synchronized(lock) { val out = chunks.filter { it.source == source }; chunks.removeAll(out.toSet()); unstat(out); gen++ }
     }
 
     /** On garde les ~1500 derniers échanges (largement assez, et la recherche reste instantanée). */
@@ -360,7 +359,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         val gone = chats.take(extra)
         gone.forEach { db.deleteId(it.id) }
         val ids = gone.map { it.id }.toHashSet()
-        synchronized(lock) { chunks.removeAll { it.id in ids }; rebuildStats(); gen++ }
+        synchronized(lock) { val out = chunks.filter { it.id in ids }; chunks.removeAll(out.toSet()); unstat(out); gen++ }
     }
 
     // ================================================================ recherche
@@ -427,8 +426,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
 
         // --- Fusion RRF
         val rrf = HashMap<Long, Double>()
-        bm.entries.sortedByDescending { it.value }.take(30).forEachIndexed { r, e -> rrf[e.key] = (rrf[e.key] ?: 0.0) + 1.0 / (60 + r) }
-        cos.entries.sortedByDescending { it.value }.take(30).forEachIndexed { r, e -> rrf[e.key] = (rrf[e.key] ?: 0.0) + 1.0 / (60 + r) }
+        top(bm, 30).forEachIndexed { r, e -> rrf[e.key] = (rrf[e.key] ?: 0.0) + 1.0 / (60 + r) }
+        top(cos, 30).forEachIndexed { r, e -> rrf[e.key] = (rrf[e.key] ?: 0.0) + 1.0 / (60 + r) }
 
         NoxLog.d("RAG", "Recherche « ${q.take(50)} » : ${pool.size} extraits, BM25 ${bm.size} touchés, sens ${if (qv != null) cos.size else "off"}")
         val byId = pool.associateBy { it.id }
@@ -567,11 +566,34 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         worker.shutdown()
     }
 
+    /** Total des mots de tous les extraits (pour la longueur moyenne BM25), tenu à jour pas à pas. */
+    private var totalTerms = 0L
+
     private fun rebuildStats() {
         df.clear()
-        var total = 0L
-        for (c in chunks) { total += c.terms.size; for (t in c.terms.toSet()) df[t] = (df[t] ?: 0) + 1 }
-        avgLen = if (chunks.isEmpty()) 1.0 else total.toDouble() / chunks.size
+        totalTerms = 0L
+        stat(chunks)
+    }
+
+    /** Statistiques BM25 incrémentales : un ajout ou un retrait ne recalcule que les extraits concernés. */
+    private fun stat(list: Collection<Chunk>) {
+        for (c in list) { totalTerms += c.terms.size; for (t in c.terms.toSet()) df[t] = (df[t] ?: 0) + 1 }
+        avgLen = if (chunks.isEmpty()) 1.0 else totalTerms.toDouble() / chunks.size
+    }
+
+    private fun unstat(list: Collection<Chunk>) {
+        for (c in list) {
+            totalTerms -= c.terms.size
+            for (t in c.terms.toSet()) { val n = (df[t] ?: 0) - 1; if (n <= 0) df.remove(t) else df[t] = n }
+        }
+        avgLen = if (chunks.isEmpty()) 1.0 else totalTerms.coerceAtLeast(0).toDouble() / chunks.size
+    }
+
+    /** Les [n] meilleurs scores sans trier toute la bibliothèque (tas de taille n). */
+    private fun <K> top(m: Map<K, Double>, n: Int): List<Map.Entry<K, Double>> {
+        val heap = java.util.PriorityQueue<Map.Entry<K, Double>>(n + 1, compareBy { it.value })
+        for (e in m.entries) { heap.add(e); if (heap.size > n) heap.poll() }
+        return heap.sortedByDescending { it.value }
     }
 
     private fun normalize(v: FloatArray): FloatArray {

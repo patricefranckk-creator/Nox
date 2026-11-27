@@ -182,6 +182,7 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
      */
     private fun keepRest(p: HoloAssets.Pack) {
         if (state != NeuronView.State.SPEAKING || switching) return
+        if (!ResourceManager.secondDecoderAllowed()) { NoxLog.d("HOLO", "Téléphone sous contrainte : pas de second décodeur pour les pauses"); return }
         val rest = (p.clip("listening") ?: p.clip("idle")) ?: return
         val key = rest.id + "@" + rest.speed
         val other = slots[1 - front]
@@ -200,6 +201,14 @@ class HoloView(ctx: Context) : FrameLayout(ctx) {
     private val restTick = object : Runnable {
         override fun run() {
             if (restKey == null || state != NeuronView.State.SPEAKING || switching || !isShown) return
+            if (!ResourceManager.secondDecoderAllowed()) {
+                // la pression vient de monter : on rend le second décodeur
+                val other = slots[1 - front]
+                other.stop(); other.view.alpha = HIDDEN
+                restKey = null
+                NoxLog.d("HOLO", "Second décodeur libéré (téléphone sous contrainte)")
+                return
+            }
             val now = System.nanoTime()
             val dt = if (lastTick == 0L) 0.016f else ((now - lastTick) / 1e9f).coerceIn(0f, 0.1f)
             lastTick = now

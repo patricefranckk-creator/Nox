@@ -101,6 +101,15 @@ object ResourcePolicy {
         }
     }
 
+    /**
+     * Intervalle entre deux redessins du texte en cours de génération (ms) : au moins 4 fois le coût du
+     * dernier rendu (le texte long coûte plus cher à remettre en forme), borné entre une image et 1/4 s.
+     */
+    fun uiIntervalMs(lastRenderMs: Long, p: Pressure): Long {
+        val base = when (p) { Pressure.NOMINAL -> 33L; Pressure.ELEVATED -> 66L; Pressure.CONSTRAINED -> 120L }
+        return (lastRenderMs * 4).coerceIn(base, 250L)
+    }
+
     /** Effets coûteux (halos, flous) seulement hors contrainte. */
     fun richEffects(p: Pressure) = p != Pressure.CONSTRAINED
 

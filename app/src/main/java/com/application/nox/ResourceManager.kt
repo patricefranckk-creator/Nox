@@ -165,6 +165,15 @@ object ResourceManager {
             Activity.INFERENCE in activeSet || (started && Nox.started && Nox.engine.busy), current())
     } catch (_: Throwable) { 1000L / fps.coerceAtLeast(1) }
 
+    /** Rythme de mise à jour du texte pendant la génération. */
+    fun uiIntervalMs(lastRenderMs: Long): Long = try { ResourcePolicy.uiIntervalMs(lastRenderMs, pressure) } catch (_: Throwable) { 33L }
+
+    /**
+     * Hologramme pendant la parole : la boucle « bouche fermée » demande un second décodeur vidéo.
+     * Sous contrainte on s'en passe (la bouche suit alors la seule vidéo de parole).
+     */
+    fun secondDecoderAllowed(): Boolean = pressure != Pressure.CONSTRAINED
+
     /** Effets graphiques coûteux autorisés ? */
     fun richEffects(): Boolean = ResourcePolicy.richEffects(pressure)
 

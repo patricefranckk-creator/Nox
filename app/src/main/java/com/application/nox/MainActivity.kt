@@ -737,12 +737,32 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         if (speak) voiceOut.beginStream()
 
         val listener = object : LlmEngine.StreamListener {
-            override fun onChunk(text: String) {
-                reply.text += text
+            // Affichage regroupé : la voix reçoit chaque fragment tout de suite, l'écran se redessine au rythme
+            // décidé par le pilotage des ressources (plus espacé quand le texte est long ou le téléphone chargé).
+            private var lastUi = 0L
+            private var renderMs = 0L
+            private var uiPending = false
+            private val uiTick = Runnable { if (uiPending) flushUi() }
+
+            private fun flushUi() {
+                uiPending = false
+                val t0 = android.os.SystemClock.uptimeMillis()
                 view.render()
                 voicePage.answer(reply.text)
-                if (speak) voiceOut.feed(text)
                 if (scroll.getChildAt(0).bottom - (scroll.height + scroll.scrollY) < dp(140)) scrollToEnd()
+                lastUi = android.os.SystemClock.uptimeMillis()
+                renderMs = lastUi - t0
+            }
+
+            private fun finalUi() { main.removeCallbacks(uiTick); uiPending = false }
+
+            override fun onChunk(text: String) {
+                reply.text += text
+                if (speak) voiceOut.feed(text)
+                val now = android.os.SystemClock.uptimeMillis()
+                val gap = ResourceManager.uiIntervalMs(renderMs)
+                if (now - lastUi >= gap) { main.removeCallbacks(uiTick); flushUi() }
+                else if (!uiPending) { uiPending = true; main.postDelayed(uiTick, gap - (now - lastUi)) }
             }
 
             override fun onTranscript(text: String) {
@@ -758,8 +778,10 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             override fun onSuggestions(list: List<String>) { view.setSuggestions(list); scrollToEnd() }
 
             override fun onDone(stats: String) {
+                finalUi()
                 if (reply.text.isBlank()) reply.text = "(silence)"
                 view.render(); view.refreshFooter()
+                voicePage.answer(reply.text)
                 statsLine.text = stats
                 if (prefs.rememberChats && stats != "interrompu" && !stats.startsWith(LIBRARY_ANSWER)) library.addExchange(userMsg.text.removePrefix("🎙 ").removePrefix("📷 "), reply.text)
                 finishTurn(speak)
@@ -767,6 +789,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
             }
 
             override fun onError(msg: String) {
+                finalUi()
                 voicePage.notice("⚠ $msg")
                 reply.text = if (reply.text.isBlank()) "⚠ $msg" else reply.text + "\n\n⚠ $msg"
                 view.render(); view.refreshFooter()
