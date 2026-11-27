@@ -15,8 +15,11 @@ fun testResources(): Int {
     check("mémoire basse Android → contrainte", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(low = true)) == Pressure.CONSTRAINED)
     check("refroidi mais trop tôt → reste contrainte", ResourcePolicy.pressure(Pressure.CONSTRAINED, 95_000, 100_000, s()) == Pressure.CONSTRAINED)
     check("refroidi après le temps de séjour → nominale", ResourcePolicy.pressure(Pressure.CONSTRAINED, 0, 100_000, s()) == Pressure.NOMINAL)
-    check("hystérésis : 0,55 ne fait pas redescendre l'élevée", ResourcePolicy.pressure(Pressure.ELEVATED, 0, 100_000, s(head = 0.55f)) == Pressure.ELEVATED)
-    check("hystérésis : 0,55 ne fait pas monter la nominale", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(head = 0.55f)) == Pressure.NOMINAL)
+    check("hystérésis : chaleur 0,55 ne fait pas redescendre l'élevée", ResourcePolicy.pressure(Pressure.ELEVATED, 0, 100_000, s(head = 0.775f)) == Pressure.ELEVATED)
+    check("hystérésis : chaleur 0,55 ne fait pas monter la nominale", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(head = 0.775f)) == Pressure.NOMINAL)
+    check("marge 0,66 au repos (HONOR) → nominale", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(head = 0.66f)) == Pressure.NOMINAL)
+    check("passage en arrière-plan (niveau 20) n'est pas un manque de mémoire", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(trim = 20)) == Pressure.NOMINAL)
+    check("mémoire critique en cours d'utilisation → contrainte", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(trim = 15)) == Pressure.CONSTRAINED)
     check("RAM à 95 % → contrainte", ResourcePolicy.pressure(Pressure.NOMINAL, 0, 100_000, s(avail = 400)) == Pressure.CONSTRAINED)
 
     check("animation nominale 60 i/s", ResourcePolicy.frameBudgetMs(60, false, false, Pressure.NOMINAL) == 16L)
