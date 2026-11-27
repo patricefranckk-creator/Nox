@@ -51,6 +51,9 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     private var voiceIn: VoiceIn? = null
     private var capture: AudioCapture? = null
     private var pendingImage: ByteArray? = null
+    /** Dernière photo envoyée : remontrée à Gemma quand la question suivante en parle encore. */
+    private var lastPhoto: ByteArray? = null
+    private var lastPhotoAt = 0L
     private var cameraUri: Uri? = null
     private var embedTried = false
     private var listenWhenReady = false
@@ -693,9 +696,16 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
     }
 
     private fun send(text: String) {
-        val img = pendingImage
+        var img = pendingImage
         clearAttachment()
-        runTurn(if (img != null && text.isBlank()) "Que vois-tu sur cette photo ?" else text, null, 0L, img)
+        if (img != null) { lastPhoto = img; lastPhotoAt = System.currentTimeMillis() }
+        else if (lastPhoto != null && System.currentTimeMillis() - lastPhotoAt < PHOTO_FOLLOW_MS && Intents.aboutPhoto(text)) {
+            // « décris-la mieux », « c'est écrit quoi sur l'étiquette ? » : Gemma ne garde pas l'image, on la lui remontre
+            img = lastPhoto
+            lastPhotoAt = System.currentTimeMillis()
+            NoxLog.i("VUE", "Question sur la photo précédente : elle est remontrée à Gemma")
+        }
+        runTurn(if (img != null && text.isBlank()) "Décris cette photo en détail." else text, null, 0L, img)
     }
 
     private fun sendAudio(wavs: List<ByteArray>, ms: Long) = runTurn(null, wavs, ms)
@@ -718,7 +728,7 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
 
         val prior = messages.toList()
         val userMsg = ChatMsg(true, when {
-            image != null -> "📷 " + (text?.ifBlank { "Que vois-tu sur cette photo ?" } ?: "")
+            image != null -> "📷 " + (text?.ifBlank { "Décris cette photo en détail." } ?: "")
             text != null -> text
             else -> "🎙 message vocal (${(ms + 500) / 1000} s)"
         }).apply { voice = wav != null || turnFromVoice }
@@ -1545,6 +1555,8 @@ class MainActivity : Activity(), VoiceIn.Listener, VoiceOut.Listener, AudioCaptu
         /** Marque des réponses tirées directement de la bibliothèque (ligne de stats). */
         const val LIBRARY_ANSWER = "bibliothèque"
         /** Durée de l'écran de démarrage (un toucher le passe). */
+        /** Une question sur « la photo » reste rattachée à la dernière image pendant 10 minutes. */
+        private const val PHOTO_FOLLOW_MS = 10 * 60_000L
         const val SPLASH_MS = 10_000L
         /** Envoyé par Freekipedia (« Envoyer à Nox ») avec le fichier .db en données. */
         const val ACTION_IMPORT_FREEKIPEDIA = "com.application.nox.IMPORTER_FREEKIPEDIA"

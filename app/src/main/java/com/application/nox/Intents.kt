@@ -140,6 +140,11 @@ object Intents {
         return q.ifBlank { null }
     }
 
+    private val PHOTO_FOLLOW = Regex("\\b(photo|image|cliche|decri|decris|description|details?|couleurs?|etiquette|marque|dessus|on y voit|vois-tu|arriere-plan)")
+
+    /** Une question qui parle encore de la photo envoyée juste avant (pour la lui remontrer). */
+    fun aboutPhoto(text: String): Boolean = PHOTO_FOLLOW.containsMatchIn(Text.fold(text.replace('’', '\'')))
+
     fun lang(name: String): Lang = LANGS.firstOrNull { it.name == name } ?: LANGS.first()
 
     /** Nettoie une note dictée : hésitations retirées, majuscule, point final. */

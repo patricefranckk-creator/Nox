@@ -59,6 +59,11 @@ fun testIntents(): Int {
         "Raconte-moi une blague" to null, "Cherche dans ta mémoire des infos sur l'univers" to "l'univers", "Qu'est-ce qu'il y a sur mes documents à propos du solaire" to "qu'est-ce qu'il y a a propos du solaire")
     for ((t, want) in libs) { val got = Intents.libraryQuery(t)
         if (got != want) { bad++; println("✗ fiches « $t » → $got (attendu $want)") } else println("✓ fiches « $t » → $got") }
+    for ((t, want) in listOf("Juste une bonne description de la photo" to true, "Dis-m'en plus sur l'étiquette" to true,
+        "Qu'est-ce qu'il y a écrit dessus ?" to true, "Quelle heure est-il ?" to false, "Mets un minuteur de 5 minutes" to false)) {
+        val got = Intents.aboutPhoto(t)
+        if (got != want) { bad++; println("✗ photo « $t » → $got") } else println("✓ photo « $t » → $got")
+    }
     println("Phrases spéciales : ${cases.size + 4 - bad}/${cases.size + 4} correctes (+ souvenirs, incertitudes, indices, enchaînements)")
     return bad
 }

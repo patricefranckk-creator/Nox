@@ -408,7 +408,7 @@ class LlmEngine(
             if (hint != null && skillsActive) NoxLog.d("GEN", "Indice d'outil : $hint")
             val full = if (ctxBlock.isEmpty()) asked else ctxBlock + "\nMessage de l'utilisateur : " + asked
             val msg = if (image != null && visionReady)
-                Message.user(Contents.of(Content.ImageBytes(image), Content.Text(full.ifBlank { "Décris cette image." })))
+                Message.user(Contents.of(Content.ImageBytes(image), Content.Text(PHOTO_INSTRUCTION + "\n\n" + full.ifBlank { "Décris cette image." })))
             else Message.user(full)
             val extra = if (image != null) (280 * CHARS_PER_TOKEN).toInt() else 0
             if (image != null) NoxLog.i("VUE", "Photo envoyée à Gemma : ${image.size / 1024} Ko")
@@ -620,6 +620,22 @@ class LlmEngine(
         private const val SKILLS_PROMPT_CHARS = 2400
         /** Jetons audio par seconde (estimation prudente pour la gestion du contexte). */
         private const val AUDIO_TOKENS_PER_S = 12
+
+        /**
+
+         * Consigne jointe à chaque photo : la règle « une phrase ou deux » de la personnalité ne doit pas
+
+         * réduire une description à « je vois un ours en peluche ».
+
+         */
+
+        private const val PHOTO_INSTRUCTION = "Regarde la photo attentivement avant de répondre. Pour une description, sois précis et concret, " +
+
+            "en quatre à six phrases naturelles : le sujet principal, sa forme, ses couleurs et ses matières, tout texte, marque ou étiquette lisible " +
+
+            "(recopie-le), son état (neuf, usé, taché…), puis le fond et le contexte. Si la question porte sur un détail, réponds sur ce détail. " +
+
+            "Ne parle que de ce qui est visible ; si quelque chose est incertain, dis-le."
 
         const val AUDIO_INSTRUCTION =
             "Ceci est un message vocal de ton interlocuteur. Écris d'abord, seul sur la première ligne, " +
