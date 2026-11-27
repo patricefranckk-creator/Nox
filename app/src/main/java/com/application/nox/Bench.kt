@@ -259,7 +259,13 @@ class Bench(private val a: MainActivity) {
         NoxLog.p("BANC", summary.replace('\n', ' '))
         line("\n$summary\n$cmp")
 
-        report.append("\n── BILAN ──\n$summary\n$cmp\n\n── JOURNAL PENDANT LE BANC ──\n")
+        report.append("\n── BILAN ──\n$summary\n$cmp\n")
+        // mêmes indicateurs avant/après une évolution : pression, apprentissage, recherches mutualisées
+        report.append("\n── RESSOURCES ──\n${ResourceManager.describe()}\n")
+        report.append("Recherches dans les fiches : ${Nox.library.searched} calculée(s) · ${Nox.library.reused} réutilisée(s)\n")
+        report.append("Mémoire : ${NoxLog.memSnapshot()}\n")
+        ResourceManager.recentDecisions().forEach { report.append("  décision · $it\n") }
+        report.append("\n── JOURNAL PENDANT LE BANC ──\n")
         report.append(NoxLog.fullText().lines().dropWhile { it.length < 14 || it.substring(0, 14) < stamp }.joinToString("\n").takeLast(300_000))
         report.append("\n── FIN DU BANC D'ESSAI ──\n")
         saveReport()
