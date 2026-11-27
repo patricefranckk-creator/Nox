@@ -54,6 +54,18 @@ class VoiceOut(private val ctx: Context, private val prefs: Prefs, private val l
         }
         if (initTries > 1) NoxLog.i("VOIX", "Synthèse vocale prête au ${initTries}e essai")
         ok = true
+        if (reviving) {
+            reviving = false
+            revived = true
+            NoxLog.i("VOIX", "Synthèse vocale relancée : ${waiting.size} phrase(s) relue(s)")
+            main.post {
+                val ids = waiting.toList(); waiting.clear()
+                for (id in ids) {
+                    val t = texts[id] ?: continue
+                    if (tts.speak(t, TextToSpeech.QUEUE_ADD, Bundle(), id) != TextToSpeech.SUCCESS) { texts.remove(id); utteranceFinished() }
+                }
+            }
+        }
         tts.setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -81,6 +93,7 @@ class VoiceOut(private val ctx: Context, private val prefs: Prefs, private val l
 
             override fun onDone(id: String?) {
                 id?.let { texts.remove(it) }
+                revived = false
                 main.post { FaceBrain.silent(); utteranceFinished() }
             }
 
@@ -124,7 +137,7 @@ class VoiceOut(private val ctx: Context, private val prefs: Prefs, private val l
     }
 
     fun feed(chunk: String) {
-        if (!ok) return
+        if (!ok && !reviving) return
         buffer.append(chunk)
         // On découpe aux fins de phrase pour parler au plus tôt.
         while (true) {
@@ -138,7 +151,7 @@ class VoiceOut(private val ctx: Context, private val prefs: Prefs, private val l
 
     fun endStream() {
         streamClosed = true
-        if (ok && buffer.isNotBlank()) speakClean(buffer.toString())
+        if ((ok || reviving) && buffer.isNotBlank()) speakClean(buffer.toString())
         buffer.setLength(0)
         checkAllDone()
     }
@@ -215,12 +228,37 @@ class VoiceOut(private val ctx: Context, private val prefs: Prefs, private val l
         val id = "nox-${seq++}"
         texts[id] = t
         pending++
-        val r = tts.speak(t, TextToSpeech.QUEUE_ADD, Bundle(), id)
+        val r = if (reviving) TextToSpeech.ERROR else tts.speak(t, TextToSpeech.QUEUE_ADD, Bundle(), id)
         if (r != TextToSpeech.SUCCESS) {
-            NoxLog.w("VOIX", "La synthèse vocale a refusé la phrase $id (code $r)")
-            texts.remove(id)
-            utteranceFinished()
+            // la synthèse de Google a souvent été fermée par Android pendant une longue absence :
+            // on la relance une fois et on relit les phrases mises de côté
+            NoxLog.w("VOIX", "La synthèse vocale a refusé la phrase $id (code $r)" + if (!revived) " : relance de la synthèse" else "")
+            if (!revived) { waiting += id; revive() }
+            else { texts.remove(id); utteranceFinished() }
         }
+    }
+
+    /** Phrases refusées pendant que la synthèse redémarre, relues dès qu'elle est prête. */
+    private val waiting = ArrayList<String>()
+    private var reviving = false
+    /** Une seule relance par panne : si elle refuse encore, on n'insiste pas. */
+    private var revived = false
+
+    private fun revive() {
+        if (reviving) return
+        reviving = true
+        ok = false
+        try { tts.shutdown() } catch (_: Throwable) {}
+        tts = TextToSpeech(ctx.applicationContext, this)
+        main.postDelayed({
+            if (reviving) {
+                NoxLog.w("VOIX", "La synthèse vocale n'a pas redémarré")
+                reviving = false
+                revived = true
+                val ids = waiting.toList(); waiting.clear()
+                ids.forEach { texts.remove(it); utteranceFinished() }
+            }
+        }, 6000)
     }
 
     private fun checkVolume() {

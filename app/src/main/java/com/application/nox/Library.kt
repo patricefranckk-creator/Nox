@@ -436,7 +436,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             val b = bm[e.key] ?: 0.0
             val s = cos[e.key] ?: 0.0
             val relevant = when {
-                qv == null -> if (strict) b >= BM25_STRONG else b > 0.0
+                // sans EmbeddingGemma, seuls les mots décident : on exige qu'ils soient tous dans l'extrait
+                qv == null -> if (strict) b >= BM25_KEYWORDS_ONLY && covers(c, qTerms) else b > 0.0
                 strict -> s >= COS_STRONG || (b >= BM25_STRONG && s >= COS_MID)
                 else -> s >= COS_WEAK || (b > 0.0 && s >= COS_WEAK - 0.04)
             }
@@ -589,6 +590,12 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         avgLen = if (chunks.isEmpty()) 1.0 else totalTerms.coerceAtLeast(0).toDouble() / chunks.size
     }
 
+    private fun covers(c: Chunk, qTerms: List<String>): Boolean {
+        if (qTerms.isEmpty()) return false
+        val have = c.terms.toHashSet()
+        return qTerms.all { it in have }
+    }
+
     /** Les [n] meilleurs scores sans trier toute la bibliothèque (tas de taille n). */
     private fun <K> top(m: Map<K, Double>, n: Int): List<Map.Entry<K, Double>> {
         val heap = java.util.PriorityQueue<Map.Entry<K, Double>>(n + 1, compareBy { it.value })
@@ -613,6 +620,8 @@ class Library(private val ctx: Context, private val store: ModelStore) {
         /** Voix ↔ texte : les scores croisés sont plus bas que texte ↔ texte. */
         const val COS_AUDIO = 0.80
         const val BM25_STRONG = 4.0
+        /** Injection automatique sans recherche par le sens : score fort et tous les mots de la question présents. */
+        const val BM25_KEYWORDS_ONLY = 5.0
 
         /**
          * Préfixes EmbeddingGemma de la bibliothèque. Freekipedia (ModeleNox) utilise exactement le même

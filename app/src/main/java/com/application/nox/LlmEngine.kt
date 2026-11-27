@@ -394,7 +394,8 @@ class LlmEngine(
             }
             val ragClock = NoxLog.chrono()
             val hits = try {
-                if (prefs.ragAuto && rag) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()
+                // une photo parle d'elle-même : pas de fiches ajoutées automatiquement
+                if (prefs.ragAuto && rag && image == null) library.search(text, k = 3, excludeChatsAfter = skills.conversationStart, strict = true) else emptyList()
             } catch (t: Throwable) { NoxLog.e("RAG", "Recherche automatique", t); emptyList() }
             lastRagMs = ragClock.ms(); lastRagHits = hits.size
             if (hits.isNotEmpty()) NoxLog.i("RAG", "Injection auto ${hits.size} extrait(s) en $lastRagMs ms : " + hits.joinToString(" | ") { "${it.chunk.title.take(30)} (${it.why})" })
@@ -558,7 +559,7 @@ class LlmEngine(
             if (dec > 50) tokens * 1000.0 / dec else 0.0, lastRagMs, lastRagHits, skills.callsThisTurn.get(),
             (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt(), backendLabel))
         ResourceManager.onTurn((tFirst - t0) / 1_000_000, if (dec > 50) tokens * 1000.0 / dec else 0.0,
-            (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt(), backendLabel)
+            (charsInContext * 100 / (ctxTokens * CHARS_PER_TOKEN)).toInt(), backendLabel, mode == "texte" && skills.callsThisTurn.get() == 0)
     }
 
     private fun stats(t0: Long, tFirst: Long, chars: Int): String {
@@ -713,7 +714,8 @@ class ThinkFilter {
 
 /**
  * Rattrape un appel d'outil que le modèle écrit en texte au lieu de l'appeler
- * (ex. « calculer{expression:<|"|>7 * 8<|"|>} ») : rien n'est affiché, l'outil est exécuté à la fin.
+ * (ex. « calculer{expression:<|"|>7 * 8<|"|>} » ou « calculer(expression: "7 * 8") ») : rien n'est affiché,
+ * l'outil est exécuté à la fin.
  */
 class LeakedCallFilter(private val names: Set<String>) {
     private val head = StringBuilder()
@@ -729,7 +731,7 @@ class LeakedCallFilter(private val names: Set<String>) {
         val name = h.takeWhile { it.isLetter() || it == '_' }
         val stillPossible = name.length == h.length && names.any { it.startsWith(name) }
         return when {
-            name.length < h.length && h[name.length] == '{' && name in names -> { leaking = true; decided = true; "" }
+            name.length < h.length && (h[name.length] == '{' || h[name.length] == '(') && name in names -> { leaking = true; decided = true; "" }
             stillPossible && h.length < 24 -> ""
             else -> { decided = true; head.toString().also { head.setLength(0) } }
         }
@@ -739,8 +741,10 @@ class LeakedCallFilter(private val names: Set<String>) {
     fun finish(): String? {
         if (!leaking) return if (decided || head.isEmpty()) null else head.toString().also { head.setLength(0) }
         val h = head.toString().trimStart().removePrefix("call:").replace("<|\"|>", "\"").replace("<tool_call|>", "")
-        val name = h.substringBefore('{')
-        val body = h.substringAfter('{').substringBeforeLast('}')
+        val open = h.indexOfFirst { it == '{' || it == '(' }
+        val name = h.substring(0, open.coerceAtLeast(0))
+        val close = if (open >= 0 && h[open] == '(') ')' else '}'
+        val body = h.substring(open + 1).substringBeforeLast(close)
         val args = org.json.JSONObject()
         Regex("(\\w+)\\s*:\\s*(?:\"((?:[^\"\\\\]|\\\\.)*)\"|([^,}]+))").findAll(body).forEach { m ->
             val k = m.groupValues[1]

@@ -51,6 +51,13 @@ object ResourceManager {
         if (started) return
         app = ctx.applicationContext
         profile = app.getSharedPreferences("nox_profil_appareil", Context.MODE_PRIVATE)
+        if (profile.getInt("version", 1) < 2) {
+            // la v1 apprenait aussi des tours avec recherche web ou photo (premier mot à 10 s) : on oublie
+            val e = profile.edit()
+            for (b in 0..3) { e.remove("ttft_$b"); e.remove("n_$b") }
+            e.remove("kills"); e.remove("kills_seen")
+            e.putInt("version", 2).apply()
+        }
         power = app.getSystemService(PowerManager::class.java)
         am = app.getSystemService(ActivityManager::class.java)
         pressureSince = SystemClock.uptimeMillis()
@@ -63,7 +70,7 @@ object ResourceManager {
                 reassess("Android demande de libérer de la mémoire (niveau $level)")
             }
             override fun onConfigurationChanged(newConfig: Configuration) {}
-            @Deprecated("Remplacé par onTrimMemory") override fun onLowMemory() = onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
+            @Deprecated("Remplacé par onTrimMemory") override fun onLowMemory() = onTrimMemory(15)
         })
         recordPastKills()
         reassess("démarrage")
@@ -214,8 +221,9 @@ object ResourceManager {
     // ------------------------------------------------------------------ apprentissage
 
     /** Fin d'un tour de génération : on nourrit le profil de l'appareil. */
-    fun onTurn(ttftMs: Long, tps: Double, ctxPct: Int, backend: String) {
-        if (!started || ttftMs <= 0) return
+    fun onTurn(ttftMs: Long, tps: Double, ctxPct: Int, backend: String, plain: Boolean) {
+        // seuls les tours ordinaires (texte, sans outil ni photo) disent quelque chose du remplissage du contexte
+        if (!started || ttftMs <= 0 || !plain) return
         try {
             val b = ResourcePolicy.bucket(ctxPct)
             val n = profile.getInt("n_$b", 0)
@@ -241,21 +249,28 @@ object ResourceManager {
     private fun recordPastKills() {
         try {
             val known = kills().toMutableSet()
-            val since = profile.getLong("kills_seen", 0L)
+            val since = profile.getLong(KEY_SEEN, 0L)
             var newest = since
             for (x in am?.getHistoricalProcessExitReasons(app.packageName, 0, 16).orEmpty()) {
                 if (x.timestamp <= since) continue
                 newest = maxOf(newest, x.timestamp)
                 val lowMem = x.reason == ApplicationExitInfo.REASON_LOW_MEMORY || (x.description ?: "").contains("LowMem", true)
-                if (lowMem) known += x.timestamp
+                // en arrière-plan, Android ferme les applis pour faire de la place : ce n'est pas Nox qui déborde.
+                // Seules comptent les fermetures pendant que Nox était à l'écran.
+                val inFront = x.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+                if (lowMem && inFront) known += x.timestamp
             }
             val cut = System.currentTimeMillis() - ResourcePolicy.KILL_WINDOW_MS
-            profile.edit().putString("kills", known.filter { it > cut }.sorted().joinToString(",")).putLong("kills_seen", newest).apply()
+            profile.edit().putString(KEY_KILLS, known.filter { it > cut }.sorted().joinToString(",")).putLong(KEY_SEEN, newest).apply()
             earlyCompactLogged = earlyCompact()
         } catch (t: Throwable) { NoxLog.w(TAG, "Historique des fermetures illisible : ${t.message}") }
     }
 
-    private fun kills(): List<Long> = profile.getString("kills", "").orEmpty().split(',').mapNotNull { it.toLongOrNull() }
+    private fun kills(): List<Long> = profile.getString(KEY_KILLS, "").orEmpty().split(',').mapNotNull { it.toLongOrNull() }
+
+    /** Clés v2 : la v1 comptait aussi les fermetures en arrière-plan (normales), on repart de zéro. */
+    private const val KEY_KILLS = "kills_v2"
+    private const val KEY_SEEN = "kills_v2_seen"
 
     // ------------------------------------------------------------------ observabilité
 

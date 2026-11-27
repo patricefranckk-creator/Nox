@@ -33,12 +33,17 @@ object ResourcePolicy {
 
     // ------------------------------------------------------------------ pression
 
-    /** Score de chaleur 0..1+ : le plus pessimiste du statut Android et de la marge thermique. */
+    /**
+     * Score de chaleur 0..1+ : le plus pessimiste du statut Android et de la marge thermique. Certains
+     * téléphones annoncent déjà une marge de 0,5 à 0,65 au repos (HONOR) : la marge ne compte qu'au-delà
+     * de 0,5, et 1,0 (bridage annoncé) reste le maximum.
+     */
     fun heat(s: Sample): Float {
         val byStatus = when (s.thermalStatus) {
             0 -> 0f; 1 -> 0.45f; 2 -> 0.65f; 3 -> 0.88f; else -> 1f
         }
-        return maxOf(byStatus, s.headroom ?: 0f)
+        val byHeadroom = s.headroom?.let { ((it - 0.5f) / 0.5f).coerceIn(0f, 1.2f) } ?: 0f
+        return maxOf(byStatus, byHeadroom)
     }
 
     /** Score de mémoire 0..1 : part de RAM occupée, relevée si Android signale une tension. */
@@ -47,10 +52,12 @@ object ResourcePolicy {
         val used = 1f - s.availMb.toFloat() / s.totalMb
         // en dessous d'environ 9 % de RAM libre, Android commence à tuer des applis
         val byFree = ((used - 0.70f) / 0.21f).coerceIn(0f, 1f)
-        val byTrim = when {
-            s.trimLevel >= 15 -> 0.9f   // TRIM_MEMORY_RUNNING_CRITICAL
-            s.trimLevel >= 10 -> 0.7f   // TRIM_MEMORY_RUNNING_LOW
-            s.trimLevel >= 5 -> 0.5f    // TRIM_MEMORY_RUNNING_MODERATE
+        // seuls les niveaux « en cours d'utilisation » comptent ; 20 et plus veulent dire « Nox est passé
+        // en arrière-plan » (UI_HIDDEN, BACKGROUND…), pas que le téléphone manque de mémoire
+        val byTrim = when (s.trimLevel) {
+            15 -> 0.9f   // TRIM_MEMORY_RUNNING_CRITICAL
+            10 -> 0.7f   // TRIM_MEMORY_RUNNING_LOW
+            5 -> 0.5f    // TRIM_MEMORY_RUNNING_MODERATE
             else -> 0f
         }
         return maxOf(byFree, byTrim, if (s.lowMemory) 0.9f else 0f)
