@@ -437,7 +437,7 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             val s = cos[e.key] ?: 0.0
             val relevant = when {
                 // sans EmbeddingGemma, seuls les mots décident : on exige qu'ils soient tous dans l'extrait
-                qv == null -> if (strict) b >= BM25_KEYWORDS_ONLY && covers(c, qTerms) else b > 0.0
+                qv == null -> if (strict) keywordsOnlyOk(c, qTerms, b) else b > 0.0
                 strict -> s >= COS_STRONG || (b >= BM25_STRONG && s >= COS_MID)
                 else -> s >= COS_WEAK || (b > 0.0 && s >= COS_WEAK - 0.04)
             }
@@ -488,7 +488,9 @@ class Library(private val ctx: Context, private val store: ModelStore) {
     /** Bloc de contexte compact à placer devant le message de l'utilisateur. */
     fun contextBlock(hits: List<Hit>, maxChars: Int = 1600): String {
         if (hits.isEmpty()) return ""
-        val sb = StringBuilder("[Extraits trouvés dans la bibliothèque de l'utilisateur. Utilise-les seulement s'ils aident à répondre.]\n")
+        // cadre net : ces notes viennent de Nox, pas de l'utilisateur, et ne doivent pas être commentées
+        val sb = StringBuilder("[Notes de référence trouvées automatiquement par Nox, pas envoyées par l'utilisateur. " +
+            "Sers-t'en seulement si elles répondent à son message ; sinon ignore-les complètement et n'en parle pas.]\n")
         for (h in hits) {
             val line = "• ${h.chunk.title} : ${h.chunk.text.replace('\n', ' ')}\n"
             if (sb.length + line.length > maxChars) { if (sb.length < maxChars - 200) sb.append(line.take(maxChars - sb.length - 4)).append("…\n"); break }
@@ -588,6 +590,19 @@ class Library(private val ctx: Context, private val store: ModelStore) {
             for (t in c.terms.toSet()) { val n = (df[t] ?: 0) - 1; if (n <= 0) df.remove(t) else df[t] = n }
         }
         avgLen = if (chunks.isEmpty()) 1.0 else totalTerms.coerceAtLeast(0).toDouble() / chunks.size
+    }
+
+    /**
+     * Injection automatique sans recherche par le sens. Un seul mot (« merci », « politesse ») ne suffit
+     * que s'il est le sujet même de la fiche (dans son titre) ; les anciennes conversations ne sont jamais
+     * injectées ainsi (un « merci » s'y trouve toujours).
+     */
+    private fun keywordsOnlyOk(c: Chunk, qTerms: List<String>, bm25: Double): Boolean {
+        if (c.source.startsWith("chat:")) return false
+        if (bm25 < BM25_KEYWORDS_ONLY || !covers(c, qTerms)) return false
+        if (qTerms.size >= 2) return true
+        val title = Text.terms(c.title).toHashSet()
+        return qTerms.all { it in title }
     }
 
     private fun covers(c: Chunk, qTerms: List<String>): Boolean {
